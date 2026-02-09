@@ -21,7 +21,7 @@
     "lint": "oxlint --report-unused-disable-directives",
     "test": "turbo run test",
     "fmt": "oxfmt",
-    "prepack": "bun run build",
+    "prepack": "node scripts/prepack.mjs",
     "build:contracts": "bun run --cwd packages/contracts build"
   },
   "dependencies": {
