@@ -341,6 +341,37 @@ async function main() {
     if ((headAssetResponse.headers.get("accept-ranges") ?? "").toLowerCase() !== "bytes") {
       throw new Error("Smoke test failed: expected accept-ranges=bytes on HEAD asset response.");
     }
+    const headRangedAsset = await fetch(assetUrl, {
+      method: "HEAD",
+      headers: {
+        Range: `bytes=0-${rangeEnd}`,
+      },
+    });
+    if (headRangedAsset.status !== 206) {
+      throw new Error(
+        `Smoke test failed: expected HEAD ranged asset status 206, received ${headRangedAsset.status}.`,
+      );
+    }
+    if (headRangedAsset.headers.get("content-range") !== expectedContentRange) {
+      throw new Error(
+        `Smoke test failed: expected HEAD ranged content-range ${expectedContentRange}, got ${String(
+          headRangedAsset.headers.get("content-range"),
+        )}.`,
+      );
+    }
+    const headRangedContentLength = Number(headRangedAsset.headers.get("content-length") ?? "0");
+    if (!Number.isFinite(headRangedContentLength) || headRangedContentLength !== rangeEnd + 1) {
+      throw new Error(
+        `Smoke test failed: expected HEAD ranged content-length ${String(
+          rangeEnd + 1,
+        )}, got ${String(headRangedAsset.headers.get("content-length"))}.`,
+      );
+    }
+    if ((headRangedAsset.headers.get("accept-ranges") ?? "").toLowerCase() !== "bytes") {
+      throw new Error(
+        "Smoke test failed: expected accept-ranges=bytes on HEAD ranged asset response.",
+      );
+    }
     const missingAssetUrl = new URL("/assets/missing-bundle.js", parsedAppUrl);
     const missingAsset = await fetch(missingAssetUrl);
     if (missingAsset.status !== 404) {
