@@ -238,6 +238,13 @@ async function main() {
         )}.`,
       );
     }
+    if ((postPage.headers.get("content-type") ?? "").toLowerCase() !== "text/plain; charset=utf-8") {
+      throw new Error(
+        `Smoke test failed: expected plain-text POST error content-type, got ${String(
+          postPage.headers.get("content-type"),
+        )}.`,
+      );
+    }
     if ((postPage.headers.get("cache-control") ?? "").toLowerCase() !== "no-store") {
       throw new Error("Smoke test failed: expected cache-control=no-store on POST response.");
     }
