@@ -299,6 +299,32 @@ describe("runtimeApiServer", () => {
     client.socket.close();
   });
 
+  it("handles shell.openInEditor cursor requests", async () => {
+    const server = await startRuntimeApiServer({
+      port: 0,
+      launchCwd: process.cwd(),
+    });
+    servers.push(server);
+
+    const client = await connectClient(server.wsUrl);
+    await client.nextMessage();
+
+    const response = await sendRequest(
+      client.socket,
+      client.nextMessage,
+      "shell-open-cursor-1",
+      "shell.openInEditor",
+      {
+        cwd: process.cwd(),
+        editor: "cursor",
+      },
+    );
+    expect(response.ok).toBe(true);
+    expect(response.result).toBeNull();
+
+    client.socket.close();
+  });
+
   it("responds to dialogs.pickFolder requests", async () => {
     const server = await startRuntimeApiServer({
       port: 0,
