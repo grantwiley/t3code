@@ -384,6 +384,17 @@ async function main() {
         `Smoke test failed: expected current If-Unmodified-Since status 200, received ${ifUnmodifiedSinceCurrentAsset.status}.`,
       );
     }
+    const ifMatchPrecedenceAsset = await fetch(assetUrl, {
+      headers: {
+        "If-Match": assetEtag,
+        "If-Unmodified-Since": staleUnmodifiedSince,
+      },
+    });
+    if (ifMatchPrecedenceAsset.status !== 200) {
+      throw new Error(
+        `Smoke test failed: expected If-Match precedence status 200, received ${ifMatchPrecedenceAsset.status}.`,
+      );
+    }
     const conditionalHeadAsset = await fetch(assetUrl, {
       method: "HEAD",
       headers: {
