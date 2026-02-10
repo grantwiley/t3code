@@ -177,6 +177,9 @@ async function main() {
     if ((page.headers.get("cross-origin-resource-policy") ?? "").toLowerCase() !== "same-origin") {
       throw new Error("Smoke test failed: expected CORP header to be same-origin.");
     }
+    if ((page.headers.get("cross-origin-opener-policy") ?? "").toLowerCase() !== "same-origin") {
+      throw new Error("Smoke test failed: expected COOP header to be same-origin.");
+    }
     if ((page.headers.get("cache-control") ?? "").toLowerCase() !== "no-store") {
       throw new Error(
         `Smoke test failed: expected cache-control=no-store, got ${String(
@@ -287,6 +290,9 @@ async function main() {
     }
     if ((postPage.headers.get("cross-origin-resource-policy") ?? "").toLowerCase() !== "same-origin") {
       throw new Error("Smoke test failed: expected CORP header on POST response.");
+    }
+    if ((postPage.headers.get("cross-origin-opener-policy") ?? "").toLowerCase() !== "same-origin") {
+      throw new Error("Smoke test failed: expected COOP header on POST response.");
     }
     const headPage = await fetch(parsedAppUrl, { method: "HEAD" });
     if (headPage.status !== 200) {
