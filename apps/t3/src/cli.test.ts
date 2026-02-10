@@ -364,6 +364,13 @@ describe("resolveStaticAssetPath", () => {
       kind: "bad_request",
     });
   });
+
+  it("rejects null-byte encoded paths", () => {
+    const result = resolveStaticAssetPath("/index.html%00", distRoot);
+    expect(result).toEqual({
+      kind: "bad_request",
+    });
+  });
 });
 
 describe("resolveStaticAssetReadTarget", () => {

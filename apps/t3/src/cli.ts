@@ -377,6 +377,9 @@ export function resolveStaticAssetPath(
   } catch {
     return { kind: "bad_request" };
   }
+  if (decodedPath.includes("\0")) {
+    return { kind: "bad_request" };
+  }
 
   const normalizedPath =
     decodedPath === "/" ? "index.html" : decodedPath.replace(/^\/+/, "");
