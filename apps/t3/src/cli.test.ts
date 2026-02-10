@@ -81,6 +81,17 @@ describe("parseCliOptions", () => {
     expect(options.noOpen).toBe(false);
   });
 
+  it("supports -o as a short alias for --open", () => {
+    const options = parseCliOptions(
+      ["-o"],
+      {
+        T3_NO_OPEN: "true",
+      },
+      "/workspace",
+    );
+    expect(options.noOpen).toBe(false);
+  });
+
   it("supports explicit equals-style --open boolean overrides", () => {
     const options = parseCliOptions(
       ["--open=false"],
