@@ -9,7 +9,12 @@ import type {
   OutputChunk,
   AgentExit,
 } from "@acme/contracts";
-import { WS_EVENT_CHANNELS, wsServerMessageSchema } from "@acme/contracts";
+import {
+  WS_CLOSE_CODES,
+  WS_CLOSE_REASONS,
+  WS_EVENT_CHANNELS,
+  wsServerMessageSchema,
+} from "@acme/contracts";
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -20,6 +25,48 @@ type PendingRequest = {
 type SubscriptionSet<TValue> = Set<(value: TValue) => void>;
 const REQUEST_TIMEOUT_MS = 30_000;
 const textDecoder = new TextDecoder();
+
+function closeDetailsFromEvent(event: unknown) {
+  const code = (event as { code?: unknown } | null)?.code;
+  const reason = (event as { reason?: unknown } | null)?.reason;
+  return {
+    code: typeof code === "number" ? code : null,
+    reason: typeof reason === "string" ? reason : null,
+  };
+}
+
+function runtimeConnectErrorFromClose(event: unknown) {
+  const { code, reason } = closeDetailsFromEvent(event);
+  if (code === WS_CLOSE_CODES.unauthorized || reason === WS_CLOSE_REASONS.unauthorized) {
+    return new Error("Failed to connect to local t3 runtime: unauthorized websocket connection.");
+  }
+  if (
+    code === WS_CLOSE_CODES.replacedByNewClient ||
+    reason === WS_CLOSE_REASONS.replacedByNewClient
+  ) {
+    return new Error(
+      "Failed to connect to local t3 runtime: replaced by a newer websocket client.",
+    );
+  }
+  if (code === null) {
+    return new Error("Failed to connect to local t3 runtime.");
+  }
+  if (!reason || reason.length === 0) {
+    return new Error(`Failed to connect to local t3 runtime (close code ${code}).`);
+  }
+  return new Error(`Failed to connect to local t3 runtime (close code ${code}: ${reason}).`);
+}
+
+function requestDisconnectError(id: string, event: unknown) {
+  const { code, reason } = closeDetailsFromEvent(event);
+  if (code === null) {
+    return new Error(`Request ${id} failed: websocket disconnected.`);
+  }
+  if (!reason || reason.length === 0) {
+    return new Error(`Request ${id} failed: websocket disconnected (code ${code}).`);
+  }
+  return new Error(`Request ${id} failed: websocket disconnected (code ${code}: ${reason}).`);
+}
 
 class WsNativeApiClient {
   private socket: WebSocket | null = null;
@@ -53,13 +100,13 @@ class WsNativeApiClient {
       this.socket = socket;
       let hasOpened = false;
       let connectionSettled = false;
-      const rejectConnection = () => {
+      const rejectConnection = (error?: Error) => {
         if (connectionSettled) {
           return;
         }
         connectionSettled = true;
         this.connectPromise = null;
-        reject(new Error("Failed to connect to local t3 runtime."));
+        reject(error ?? new Error("Failed to connect to local t3 runtime."));
       };
       const resolveConnection = () => {
         if (connectionSettled) {
@@ -83,15 +130,15 @@ class WsNativeApiClient {
         void this.handleMessage(event.data);
       });
 
-      socket.addEventListener("close", () => {
+      socket.addEventListener("close", (event) => {
         this.socket = null;
         if (!hasOpened) {
-          rejectConnection();
+          rejectConnection(runtimeConnectErrorFromClose(event));
           return;
         }
         for (const [id, pending] of this.pending.entries()) {
           clearTimeout(pending.timeout);
-          pending.reject(new Error(`Request ${id} failed: websocket disconnected.`));
+          pending.reject(requestDisconnectError(id, event));
         }
         this.pending.clear();
       });

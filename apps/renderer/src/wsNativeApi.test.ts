@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { WS_CLOSE_CODES, WS_CLOSE_REASONS } from "@acme/contracts";
 
 type Listener = (event: unknown) => void;
 
@@ -23,7 +24,10 @@ class MockWebSocket {
     queueMicrotask(() => {
       if (MockWebSocket.failCloseBeforeOpen) {
         this.readyState = 3;
-        this.emit("close", { code: 4001 });
+        this.emit("close", {
+          code: WS_CLOSE_CODES.unauthorized,
+          reason: WS_CLOSE_REASONS.unauthorized,
+        });
         return;
       }
       if (MockWebSocket.failOpen) {
@@ -406,7 +410,7 @@ describe("wsNativeApi", () => {
     await waitForCondition(() => (socket?.sentMessages.length ?? 0) > 0);
     socket?.close();
 
-    await expect(request).rejects.toThrow("websocket disconnected");
+    await expect(request).rejects.toThrow("websocket disconnected (code 1000)");
   });
 
   it("reconnects on subsequent requests after websocket close", async () => {
@@ -1001,7 +1005,9 @@ describe("wsNativeApi", () => {
     const { getOrCreateWsNativeApi } = await import("./wsNativeApi");
     const api = getOrCreateWsNativeApi();
 
-    await expect(api.todos.list()).rejects.toThrow("Failed to connect to local t3 runtime.");
+    await expect(api.todos.list()).rejects.toThrow(
+      "Failed to connect to local t3 runtime: unauthorized websocket connection.",
+    );
   });
 
   it("recovers after websocket pre-open close on a later request", async () => {
@@ -1010,7 +1016,9 @@ describe("wsNativeApi", () => {
     const { getOrCreateWsNativeApi } = await import("./wsNativeApi");
     const api = getOrCreateWsNativeApi();
 
-    await expect(api.todos.list()).rejects.toThrow("Failed to connect to local t3 runtime.");
+    await expect(api.todos.list()).rejects.toThrow(
+      "Failed to connect to local t3 runtime: unauthorized websocket connection.",
+    );
 
     MockWebSocket.failCloseBeforeOpen = false;
     const secondRequest = api.todos.list();
