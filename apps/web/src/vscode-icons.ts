@@ -1,3 +1,4 @@
+import { basenameOfPath } from "./lib/utils";
 import vscodeIconsManifest from "./vscode-icons-manifest.json";
 import languageAssociationsData from "./vscode-icons-language-associations.json";
 
@@ -61,12 +62,6 @@ function toLowercaseLookup(source: Record<string, string>): Record<string, strin
   return lookup;
 }
 
-function basenameOfPath(pathValue: string): string {
-  const slashIndex = pathValue.lastIndexOf("/");
-  if (slashIndex === -1) return pathValue;
-  return pathValue.slice(slashIndex + 1);
-}
-
 function extensionCandidates(fileName: string): string[] {
   const candidates = new Set<string>();
   if (fileName.includes(".")) {
@@ -83,7 +78,10 @@ function extensionCandidates(fileName: string): string[] {
   return [...candidates];
 }
 
-function resolveLanguageFallbackDefinition(pathValue: string, theme: "light" | "dark"): string | null {
+function resolveLanguageFallbackDefinition(
+  pathValue: string,
+  theme: "light" | "dark",
+): string | null {
   const basename = basenameOfPath(pathValue).toLowerCase();
   const languageIds = theme === "light" ? lightLanguageIds : darkLanguageIds;
 
@@ -94,8 +92,9 @@ function resolveLanguageFallbackDefinition(pathValue: string, theme: "light" | "
 
   for (const candidate of extensionCandidates(basename)) {
     const languageId =
-      localLanguageIdByExtensionOverrides[candidate as keyof typeof localLanguageIdByExtensionOverrides] ??
-      languageIdByExtension[candidate];
+      localLanguageIdByExtensionOverrides[
+        candidate as keyof typeof localLanguageIdByExtensionOverrides
+      ] ?? languageIdByExtension[candidate];
     if (!languageId) continue;
     return languageIds[languageId] ?? darkLanguageIds[languageId] ?? null;
   }

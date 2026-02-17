@@ -12,3 +12,9 @@ export function isMacPlatform(platform: string): boolean {
 export function isWindowsPlatform(platform: string): boolean {
   return /^win(dows)?/i.test(platform);
 }
+
+export function basenameOfPath(pathValue: string): string {
+  const slashIndex = pathValue.lastIndexOf("/");
+  if (slashIndex === -1) return pathValue;
+  return pathValue.slice(slashIndex + 1);
+}

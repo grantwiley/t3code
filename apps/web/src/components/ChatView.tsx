@@ -91,7 +91,7 @@ import { Separator } from "./ui/separator";
 import { Group, GroupSeparator } from "./ui/group";
 import { Menu, MenuItem, MenuPopup, MenuShortcut, MenuTrigger } from "./ui/menu";
 import { CursorIcon, Icon } from "./Icons";
-import { cn, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
+import { basenameOfPath, cn, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
 import { Badge } from "./ui/badge";
 import { Command, CommandItem, CommandList } from "./ui/command";
 
@@ -120,12 +120,6 @@ function workToneClass(tone: "thinking" | "tool" | "info" | "error"): string {
   if (tone === "tool") return "text-muted-foreground/70";
   if (tone === "thinking") return "text-muted-foreground/50";
   return "text-muted-foreground/40";
-}
-
-function basenameOfPath(pathValue: string): string {
-  const slashIndex = pathValue.lastIndexOf("/");
-  if (slashIndex === -1) return pathValue;
-  return pathValue.slice(slashIndex + 1);
 }
 
 type SessionContinuityState = "resumed" | "new" | "fallback_new";
@@ -483,11 +477,7 @@ export default function ChatView() {
     };
   }, [isPathTrigger, pathTriggerQuery]);
   const workspaceEntriesQuery = useQuery({
-    queryKey: [
-      "composer-workspace-entries",
-      gitCwd,
-      debouncedPathQuery,
-    ],
+    queryKey: ["composer-workspace-entries", gitCwd, debouncedPathQuery],
     enabled: Boolean(api && gitCwd && isPathTrigger),
     staleTime: 15_000,
     placeholderData: (previous) => previous,
@@ -1298,7 +1288,8 @@ export default function ChatView() {
     setComposerMenuIndex(index);
   }, []);
   const isComposerMenuLoading =
-    composerTriggerKind === "path" && (workspaceEntriesQuery.isLoading || workspaceEntriesQuery.isFetching);
+    composerTriggerKind === "path" &&
+    (workspaceEntriesQuery.isLoading || workspaceEntriesQuery.isFetching);
 
   const onPromptChange = useCallback((nextPrompt: string, nextCursor: number) => {
     setPrompt(nextPrompt);
