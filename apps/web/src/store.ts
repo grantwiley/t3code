@@ -602,12 +602,22 @@ export function reducer(state: AppState, action: Action): AppState {
       const activeThreadId = nextThreads.some((thread) => thread.id === state.activeThreadId)
         ? state.activeThreadId
         : (nextThreads[0]?.id ?? null);
+      const shouldClearDiffTarget =
+        state.diffThreadId !== null && !nextThreads.some((t) => t.id === state.diffThreadId);
 
       return {
         ...state,
         projects: nextProjects,
         threads: nextThreads,
         activeThreadId,
+        ...(shouldClearDiffTarget
+          ? {
+              diffOpen: false,
+              diffThreadId: null,
+              diffTurnId: null,
+              diffFilePath: null,
+            }
+          : {}),
       };
     }
 
@@ -629,12 +639,22 @@ export function reducer(state: AppState, action: Action): AppState {
       const activeThreadId = threads.some((thread) => thread.id === state.activeThreadId)
         ? state.activeThreadId
         : (threads[0]?.id ?? null);
+      const shouldClearDiffTarget =
+        state.diffThreadId !== null && !threads.some((t) => t.id === state.diffThreadId);
 
       return {
         ...state,
         projects,
         threads,
         activeThreadId,
+        ...(shouldClearDiffTarget
+          ? {
+              diffOpen: false,
+              diffThreadId: null,
+              diffTurnId: null,
+              diffFilePath: null,
+            }
+          : {}),
       };
     }
 
