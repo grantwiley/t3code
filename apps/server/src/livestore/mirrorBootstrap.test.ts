@@ -1,6 +1,28 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLogger } from "../logger";
+import { PersistenceService } from "../persistenceService";
+import { LegacyStateSyncEngine } from "../stateSyncEngineLegacy";
 import { bootstrapMirrorFromCatchUp } from "./mirrorBootstrap";
+import { LiveStoreStateMirror } from "./liveStoreEngine";
+import { diffStateSnapshots } from "./parity";
+
+const tempDirs: string[] = [];
+
+function makeTempDir(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0, tempDirs.length)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe("bootstrapMirrorFromCatchUp", () => {
   it("mirrors catch-up history into the mirror sink", async () => {
@@ -140,5 +162,47 @@ describe("bootstrapMirrorFromCatchUp", () => {
       lastStateSeq: 1,
       complete: false,
     });
+  });
+
+  it("replays persisted legacy catch-up history into a real LiveStore mirror", async () => {
+    const stateDir = makeTempDir("t3code-bootstrap-replay-state-");
+    const projectDir = makeTempDir("t3code-bootstrap-replay-project-");
+    const service = new PersistenceService({
+      dbPath: path.join(stateDir, "state.sqlite"),
+    });
+    const legacy = new LegacyStateSyncEngine({ persistenceService: service });
+    const mirror = new LiveStoreStateMirror({ storeId: "bootstrap-replay-parity-test" });
+
+    try {
+      const project = legacy.addProject({ cwd: projectDir }).project;
+      const thread = legacy.createThread({
+        projectId: project.id,
+        title: "Bootstrap replay parity thread",
+      }).thread;
+      service.bindSessionToThread("bootstrap-replay-session", thread.id, "runtime-thread-bootstrap");
+      service.persistUserMessageForTurn({
+        sessionId: "bootstrap-replay-session",
+        clientMessageId: "bootstrap-message-1",
+        clientMessageText: "bootstrap replay parity",
+        input: "bootstrap replay parity",
+        attachments: [],
+      });
+
+      const expectedSnapshot = legacy.loadSnapshot();
+      const bootstrapResult = await bootstrapMirrorFromCatchUp({
+        source: legacy,
+        mirror,
+        logger: createLogger("mirror-bootstrap-test"),
+        failOnError: true,
+      });
+
+      expect(bootstrapResult.complete).toBe(true);
+      expect(bootstrapResult.lastStateSeq).toBe(expectedSnapshot.lastStateSeq);
+      expect(bootstrapResult.mirroredCount).toBeGreaterThan(0);
+      expect(diffStateSnapshots(expectedSnapshot, mirror.debugReadSnapshot())).toEqual([]);
+    } finally {
+      await mirror.dispose();
+      service.close();
+    }
   });
 });
