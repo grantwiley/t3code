@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveSyncEngineMode } from "./syncEngineMode";
+import { assertSyncEngineModeAllowed, resolveSyncEngineMode } from "./syncEngineMode";
 
 describe("resolveSyncEngineMode", () => {
   it("defaults to livestore-read-pilot when env var is missing", () => {
@@ -19,5 +19,32 @@ describe("resolveSyncEngineMode", () => {
     expect(() => resolveSyncEngineMode("something-else")).toThrow(
       /Invalid T3CODE_SYNC_ENGINE_MODE/i,
     );
+  });
+});
+
+describe("assertSyncEngineModeAllowed", () => {
+  it("allows any mode when enforcement is disabled", () => {
+    expect(() => assertSyncEngineModeAllowed("legacy")).not.toThrow();
+    expect(() => assertSyncEngineModeAllowed("shadow")).not.toThrow();
+    expect(() => assertSyncEngineModeAllowed("livestore-read-pilot")).not.toThrow();
+    expect(() => assertSyncEngineModeAllowed("livestore")).not.toThrow();
+  });
+
+  it("blocks legacy and shadow when enforceLiveStoreOnly is enabled", () => {
+    expect(() =>
+      assertSyncEngineModeAllowed("legacy", { enforceLiveStoreOnly: true }),
+    ).toThrow(/disabled/i);
+    expect(() =>
+      assertSyncEngineModeAllowed("shadow", { enforceLiveStoreOnly: true }),
+    ).toThrow(/disabled/i);
+  });
+
+  it("allows livestore modes when enforceLiveStoreOnly is enabled", () => {
+    expect(() =>
+      assertSyncEngineModeAllowed("livestore-read-pilot", { enforceLiveStoreOnly: true }),
+    ).not.toThrow();
+    expect(() =>
+      assertSyncEngineModeAllowed("livestore", { enforceLiveStoreOnly: true }),
+    ).not.toThrow();
   });
 });

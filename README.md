@@ -115,6 +115,10 @@ The server supports feature-flagged sync-engine modes while migrating from the l
 - `T3CODE_SYNC_ENGINE_MODE=shadow`
   - Keeps legacy state as canonical, but mirrors committed `state.event` traffic into a LiveStore shadow store for parity validation.
 
+- `T3CODE_LIVESTORE_ENFORCE_MODE=1`
+  - Disallows `legacy` and `shadow` sync modes at startup.
+  - Intended for post-cutover environments to prevent accidental rollback to pre-LiveStore modes.
+
 Optional diagnostics:
 
 - `T3CODE_LIVESTORE_BOOTSTRAP_PARITY_CHECK=1`

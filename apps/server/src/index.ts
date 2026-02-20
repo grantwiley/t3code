@@ -11,7 +11,7 @@ import { PersistenceService } from "./persistenceService";
 import { LegacyStateSyncEngine } from "./stateSyncEngineLegacy";
 import { LiveStoreReadPilotStateSyncEngine } from "./stateSyncEngineLiveStoreReadPilot";
 import { ShadowStateSyncEngine } from "./stateSyncEngineShadow";
-import { resolveSyncEngineMode } from "./syncEngineMode";
+import { assertSyncEngineModeAllowed, resolveSyncEngineMode } from "./syncEngineMode";
 import { createServer } from "./wsServer";
 
 fixPath();
@@ -116,6 +116,11 @@ async function main() {
   const legacyStateDir = resolveStateDir(process.env.T3CODE_STATE_DIR);
   const stateDbPath = resolveStateDbPath(process.env.T3CODE_STATE_DB_PATH);
   const syncEngineMode = resolveSyncEngineMode(process.env.T3CODE_SYNC_ENGINE_MODE);
+  const enforceLiveStoreOnly =
+    parseBooleanEnv(process.env.T3CODE_LIVESTORE_ENFORCE_MODE) ?? false;
+  assertSyncEngineModeAllowed(syncEngineMode, {
+    enforceLiveStoreOnly,
+  });
   const enableLiveStoreBootstrapParityCheck =
     parseBooleanEnv(process.env.T3CODE_LIVESTORE_BOOTSTRAP_PARITY_CHECK) ?? false;
   const enableLiveStoreCatchUpParityCheck =
@@ -191,6 +196,7 @@ async function main() {
     stateDbPath,
     legacyStateDir,
     syncEngineMode,
+    enforceLiveStoreOnly,
     liveStoreBootstrapParityCheck: enableLiveStoreBootstrapParityCheck,
     liveStoreCatchUpParityCheck: enableLiveStoreCatchUpParityCheck,
     liveStoreListMessagesParityCheck: enableLiveStoreListMessagesParityCheck,

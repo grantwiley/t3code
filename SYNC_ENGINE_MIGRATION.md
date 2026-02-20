@@ -11,6 +11,12 @@ Server mode is controlled by `T3CODE_SYNC_ENGINE_MODE`:
 - `legacy`: legacy persistence service is canonical for reads/writes.
 - `shadow`: legacy remains canonical, and `state.event` writes are mirrored into LiveStore.
 
+Optional safety gate:
+
+- `T3CODE_LIVESTORE_ENFORCE_MODE=1`
+  - prevents startup in `legacy` or `shadow` mode.
+  - use in post-cutover environments to block accidental rollback.
+
 ## Diagnostics flags
 
 - `T3CODE_LIVESTORE_BOOTSTRAP_PARITY_CHECK=1`
