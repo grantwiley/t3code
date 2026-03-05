@@ -76,6 +76,9 @@ function detailFromResult(
   if (stderr) return stderr;
   const stdout = nonEmptyTrimmed(result.stdout);
   if (stdout) return stdout;
+  if (result.code === null) {
+    return "Command was terminated before reporting an exit code.";
+  }
   if (result.code !== 0) {
     return `Command exited with code ${result.code}.`;
   }

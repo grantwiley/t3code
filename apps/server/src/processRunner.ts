@@ -24,16 +24,16 @@ interface RuntimeShellOptions {
   shell?: boolean | string | undefined;
 }
 
-export interface ProcessSpawnOptions extends ProcessSpawnBaseOptions {
+interface ProcessSpawnOptions extends ProcessSpawnBaseOptions {
   stdio?: StdioOptions | undefined;
   detached?: boolean | undefined;
 }
 
-export interface RuntimeCommandOptions extends ChildProcess.CommandOptions {
+interface RuntimeCommandOptions extends ChildProcess.CommandOptions {
   runtimeEnvironment?: ServerRuntimeEnvironment | undefined;
 }
 
-export interface ProcessSpawnSyncOptions extends ProcessSpawnBaseOptions {
+interface ProcessSpawnSyncOptions extends ProcessSpawnBaseOptions {
   stdio?: StdioOptions | undefined;
   detached?: boolean | undefined;
   encoding?: BufferEncoding | undefined;
@@ -90,11 +90,12 @@ function toSpawnOptions(options: ProcessSpawnOptions) {
   };
 }
 
-export function toRuntimeCommandOptions(
+function toRuntimeCommandOptions(
   options: RuntimeCommandOptions = {},
 ): ChildProcess.CommandOptions {
+  const { runtimeEnvironment: _, ...rest } = options;
   return {
-    ...options,
+    ...rest,
     shell: options.shell ?? shouldUseShell(options),
   };
 }
@@ -107,7 +108,7 @@ export function makeRuntimeCommand(
   return ChildProcess.make(command, [...args], toRuntimeCommandOptions(options));
 }
 
-export interface ManagedChildProcess {
+interface ManagedChildProcess {
   readonly scope: Scope.Closeable;
   readonly handle: ChildProcessSpawner.ChildProcessHandle;
 }
@@ -135,7 +136,7 @@ function spawnProcess(
   return spawn(command, args, toSpawnOptions(options));
 }
 
-export function spawnPipedProcess(
+function spawnPipedProcess(
   command: string,
   args: readonly string[],
   options: Omit<ProcessSpawnOptions, "stdio" | "detached"> = {},
@@ -252,7 +253,7 @@ const DEFAULT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
  * wrapper, leaving the actual command running. Use `taskkill /T` to kill the
  * entire process tree instead.
  */
-export function killProcessTree(
+function killProcessTree(
   child: ChildProcessHandle,
   options: {
     runtimeEnvironment?: ServerRuntimeEnvironment | undefined;
