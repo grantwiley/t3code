@@ -32,7 +32,7 @@ Legend: `[x]` done, `[ ]` not started.
 ### Phase 1: Server metadata (smallest surface)
 
 - [x] `server.getConfig`
-- [ ] `server.upsertKeybinding`
+- [x] `server.upsertKeybinding`
 
 ### Phase 2: Project + editor read/write (small inputs, bounded side effects)
 

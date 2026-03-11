@@ -13,7 +13,7 @@ const WsRpcLayer = WsRpcGroup.toLayer({
       const config = yield* ServerConfig;
       const keybindings = yield* Keybindings;
       const providerHealth = yield* ProviderHealth;
-      const keybindingsConfig = yield* keybindings.loadConfigState.pipe(Effect.orDie);
+      const keybindingsConfig = yield* keybindings.loadConfigState;
       const providers = yield* providerHealth.getStatuses;
 
       return {
@@ -24,6 +24,12 @@ const WsRpcLayer = WsRpcGroup.toLayer({
         providers,
         availableEditors: resolveAvailableEditors(),
       };
+    }),
+  [WS_METHODS.serverUpsertKeybinding]: (rule) =>
+    Effect.gen(function* () {
+      const keybindings = yield* Keybindings;
+      const keybindingsConfig = yield* keybindings.upsertKeybindingRule(rule);
+      return { keybindings: keybindingsConfig, issues: [] };
     }),
 });
 
