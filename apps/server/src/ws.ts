@@ -8,6 +8,8 @@ import {
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { ServerConfig } from "./config";
+import { GitCore } from "./git/Services/GitCore";
+import { GitManager } from "./git/Services/GitManager";
 import { Keybindings } from "./keybindings";
 import { Open, resolveAvailableEditors } from "./open";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
@@ -78,6 +80,61 @@ const WsRpcLayer = WsRpcGroup.toLayer({
     Effect.gen(function* () {
       const open = yield* Open;
       return yield* open.openInEditor(input);
+    }),
+  [WS_METHODS.gitStatus]: (input) =>
+    Effect.gen(function* () {
+      const gitManager = yield* GitManager;
+      return yield* gitManager.status(input);
+    }),
+  [WS_METHODS.gitPull]: (input) =>
+    Effect.gen(function* () {
+      const git = yield* GitCore;
+      return yield* git.pullCurrentBranch(input.cwd);
+    }),
+  [WS_METHODS.gitRunStackedAction]: (input) =>
+    Effect.gen(function* () {
+      const gitManager = yield* GitManager;
+      return yield* gitManager.runStackedAction(input);
+    }),
+  [WS_METHODS.gitResolvePullRequest]: (input) =>
+    Effect.gen(function* () {
+      const gitManager = yield* GitManager;
+      return yield* gitManager.resolvePullRequest(input);
+    }),
+  [WS_METHODS.gitPreparePullRequestThread]: (input) =>
+    Effect.gen(function* () {
+      const gitManager = yield* GitManager;
+      return yield* gitManager.preparePullRequestThread(input);
+    }),
+  [WS_METHODS.gitListBranches]: (input) =>
+    Effect.gen(function* () {
+      const git = yield* GitCore;
+      return yield* git.listBranches(input);
+    }),
+  [WS_METHODS.gitCreateWorktree]: (input) =>
+    Effect.gen(function* () {
+      const git = yield* GitCore;
+      return yield* git.createWorktree(input);
+    }),
+  [WS_METHODS.gitRemoveWorktree]: (input) =>
+    Effect.gen(function* () {
+      const git = yield* GitCore;
+      return yield* git.removeWorktree(input);
+    }),
+  [WS_METHODS.gitCreateBranch]: (input) =>
+    Effect.gen(function* () {
+      const git = yield* GitCore;
+      return yield* git.createBranch(input);
+    }),
+  [WS_METHODS.gitCheckout]: (input) =>
+    Effect.gen(function* () {
+      const git = yield* GitCore;
+      return yield* Effect.scoped(git.checkoutBranch(input));
+    }),
+  [WS_METHODS.gitInit]: (input) =>
+    Effect.gen(function* () {
+      const git = yield* GitCore;
+      return yield* git.initRepo(input);
     }),
 });
 

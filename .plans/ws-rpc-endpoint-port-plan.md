@@ -42,17 +42,17 @@ Legend: `[x]` done, `[ ]` not started.
 
 ### Phase 3: Git operations (broader side effects)
 
-- [ ] `git.status`
-- [ ] `git.listBranches`
-- [ ] `git.pull`
-- [ ] `git.runStackedAction`
-- [ ] `git.resolvePullRequest`
-- [ ] `git.preparePullRequestThread`
-- [ ] `git.createWorktree`
-- [ ] `git.removeWorktree`
-- [ ] `git.createBranch`
-- [ ] `git.checkout`
-- [ ] `git.init`
+- [x] `git.status`
+- [x] `git.listBranches`
+- [x] `git.pull`
+- [x] `git.runStackedAction`
+- [x] `git.resolvePullRequest`
+- [x] `git.preparePullRequestThread`
+- [x] `git.createWorktree`
+- [x] `git.removeWorktree`
+- [x] `git.createBranch`
+- [x] `git.checkout`
+- [x] `git.init`
 
 ### Phase 4: Terminal lifecycle + IO (stateful and streaming-adjacent)
 

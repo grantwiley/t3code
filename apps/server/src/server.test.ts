@@ -2,6 +2,7 @@ import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  GitCommandError,
   KeybindingRule,
   OpenError,
   ResolvedKeybindingRule,
@@ -18,6 +19,8 @@ import type { ServerConfigShape } from "./config.ts";
 import { ServerConfig } from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
 import { resolveAttachmentRelativePath } from "./attachmentPaths.ts";
+import { GitCore, type GitCoreShape } from "./git/Services/GitCore.ts";
+import { GitManager, type GitManagerShape } from "./git/Services/GitManager.ts";
 import { Keybindings, KeybindingsConfigError, type KeybindingsShape } from "./keybindings.ts";
 import { Open, type OpenShape } from "./open.ts";
 import { ProviderHealth, type ProviderHealthShape } from "./provider/Services/ProviderHealth.ts";
@@ -28,6 +31,8 @@ const buildAppUnderTest = (options?: {
     keybindings?: Partial<KeybindingsShape>;
     providerHealth?: Partial<ProviderHealthShape>;
     open?: Partial<OpenShape>;
+    gitCore?: Partial<GitCoreShape>;
+    gitManager?: Partial<GitManagerShape>;
   };
 }) =>
   Effect.gen(function* () {
@@ -70,6 +75,16 @@ const buildAppUnderTest = (options?: {
       Layer.provide(
         Layer.mock(Open)({
           ...options?.layers?.open,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(GitCore)({
+          ...options?.layers?.gitCore,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(GitManager)({
+          ...options?.layers?.gitManager,
         }),
       ),
       Layer.provide(layerConfig),
@@ -426,6 +441,208 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
 
       assertFailure(result, openError);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc git methods", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest({
+        layers: {
+          gitManager: {
+            status: () =>
+              Effect.succeed({
+                branch: "main",
+                hasWorkingTreeChanges: false,
+                workingTree: { files: [], insertions: 0, deletions: 0 },
+                hasUpstream: true,
+                aheadCount: 0,
+                behindCount: 0,
+                pr: null,
+              }),
+            runStackedAction: () =>
+              Effect.succeed({
+                action: "commit",
+                branch: { status: "skipped_not_requested" },
+                commit: { status: "created", commitSha: "abc123", subject: "feat: demo" },
+                push: { status: "skipped_not_requested" },
+                pr: { status: "skipped_not_requested" },
+              }),
+            resolvePullRequest: () =>
+              Effect.succeed({
+                pullRequest: {
+                  number: 1,
+                  title: "Demo PR",
+                  url: "https://example.com/pr/1",
+                  baseBranch: "main",
+                  headBranch: "feature/demo",
+                  state: "open",
+                },
+              }),
+            preparePullRequestThread: () =>
+              Effect.succeed({
+                pullRequest: {
+                  number: 1,
+                  title: "Demo PR",
+                  url: "https://example.com/pr/1",
+                  baseBranch: "main",
+                  headBranch: "feature/demo",
+                  state: "open",
+                },
+                branch: "feature/demo",
+                worktreePath: null,
+              }),
+          },
+          gitCore: {
+            pullCurrentBranch: () =>
+              Effect.succeed({
+                status: "pulled",
+                branch: "main",
+                upstreamBranch: "origin/main",
+              }),
+            listBranches: () =>
+              Effect.succeed({
+                branches: [
+                  {
+                    name: "main",
+                    current: true,
+                    isDefault: true,
+                    worktreePath: null,
+                  },
+                ],
+                isRepo: true,
+                hasOriginRemote: true,
+              }),
+            createWorktree: () =>
+              Effect.succeed({
+                worktree: { path: "/tmp/wt", branch: "feature/demo" },
+              }),
+            removeWorktree: () => Effect.void,
+            createBranch: () => Effect.void,
+            checkoutBranch: () => Effect.void,
+            initRepo: () => Effect.void,
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+
+      const status = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.gitStatus]({ cwd: "/tmp/repo" })),
+      );
+      assert.equal(status.branch, "main");
+
+      const pull = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.gitPull]({ cwd: "/tmp/repo" })),
+      );
+      assert.equal(pull.status, "pulled");
+
+      const stacked = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.gitRunStackedAction]({ cwd: "/tmp/repo", action: "commit" }),
+        ),
+      );
+      assert.equal(stacked.action, "commit");
+
+      const resolvedPr = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.gitResolvePullRequest]({
+            cwd: "/tmp/repo",
+            reference: "1",
+          }),
+        ),
+      );
+      assert.equal(resolvedPr.pullRequest.number, 1);
+
+      const prepared = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.gitPreparePullRequestThread]({
+            cwd: "/tmp/repo",
+            reference: "1",
+            mode: "local",
+          }),
+        ),
+      );
+      assert.equal(prepared.branch, "feature/demo");
+
+      const branches = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.gitListBranches]({ cwd: "/tmp/repo" }),
+        ),
+      );
+      assert.equal(branches.branches[0]?.name, "main");
+
+      const worktree = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.gitCreateWorktree]({
+            cwd: "/tmp/repo",
+            branch: "main",
+            path: null,
+          }),
+        ),
+      );
+      assert.equal(worktree.worktree.branch, "feature/demo");
+
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.gitRemoveWorktree]({
+            cwd: "/tmp/repo",
+            path: "/tmp/wt",
+          }),
+        ),
+      );
+
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.gitCreateBranch]({
+            cwd: "/tmp/repo",
+            branch: "feature/new",
+          }),
+        ),
+      );
+
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.gitCheckout]({
+            cwd: "/tmp/repo",
+            branch: "main",
+          }),
+        ),
+      );
+
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.gitInit]({
+            cwd: "/tmp/repo",
+          }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc git.pull errors", () =>
+    Effect.gen(function* () {
+      const gitError = new GitCommandError({
+        operation: "pull",
+        command: "git pull --ff-only",
+        cwd: "/tmp/repo",
+        detail: "upstream missing",
+      });
+      yield* buildAppUnderTest({
+        layers: {
+          gitCore: {
+            pullCurrentBranch: () => Effect.fail(gitError),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) => client[WS_METHODS.gitPull]({ cwd: "/tmp/repo" })).pipe(
+          Effect.result,
+        ),
+      );
+
+      assertFailure(result, gitError);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 });
