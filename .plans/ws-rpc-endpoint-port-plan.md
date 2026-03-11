@@ -37,8 +37,8 @@ Legend: `[x]` done, `[ ]` not started.
 ### Phase 2: Project + editor read/write (small inputs, bounded side effects)
 
 - [x] `projects.searchEntries`
-- [ ] `projects.writeFile`
-- [ ] `shell.openInEditor`
+- [x] `projects.writeFile`
+- [x] `shell.openInEditor`
 
 ### Phase 3: Git operations (broader side effects)
 

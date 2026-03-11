@@ -1,12 +1,17 @@
-import { Effect, Layer } from "effect";
-import { ProjectSearchEntriesError, WS_METHODS, WsRpcGroup } from "@t3tools/contracts";
+import { Effect, FileSystem, Layer, Path } from "effect";
+import {
+  ProjectSearchEntriesError,
+  ProjectWriteFileError,
+  WS_METHODS,
+  WsRpcGroup,
+} from "@t3tools/contracts";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { ServerConfig } from "./config";
 import { Keybindings } from "./keybindings";
-import { resolveAvailableEditors } from "./open";
+import { Open, resolveAvailableEditors } from "./open";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
-import { searchWorkspaceEntries } from "./workspaceEntries";
+import { resolveWorkspaceWritePath, searchWorkspaceEntries } from "./workspaceEntries";
 
 const WsRpcLayer = WsRpcGroup.toLayer({
   [WS_METHODS.serverGetConfig]: () =>
@@ -37,9 +42,42 @@ const WsRpcLayer = WsRpcGroup.toLayer({
       try: () => searchWorkspaceEntries(input),
       catch: (cause) =>
         new ProjectSearchEntriesError({
-          message: `Failed to search workspace entries`,
+          message: "Failed to search workspace entries",
           cause,
         }),
+    }),
+  [WS_METHODS.projectsWriteFile]: (input) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const target = yield* resolveWorkspaceWritePath({
+        workspaceRoot: input.cwd,
+        relativePath: input.relativePath,
+      });
+      yield* fileSystem.makeDirectory(path.dirname(target.absolutePath), { recursive: true }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProjectWriteFileError({
+              message: "Failed to prepare workspace path",
+              cause,
+            }),
+        ),
+      );
+      yield* fileSystem.writeFileString(target.absolutePath, input.contents).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProjectWriteFileError({
+              message: "Failed to write workspace file",
+              cause,
+            }),
+        ),
+      );
+      return { relativePath: target.relativePath };
+    }),
+  [WS_METHODS.shellOpenInEditor]: (input) =>
+    Effect.gen(function* () {
+      const open = yield* Open;
+      return yield* open.openInEditor(input);
     }),
 });
 

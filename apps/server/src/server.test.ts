@@ -1,9 +1,15 @@
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { KeybindingRule, ResolvedKeybindingRule, WS_METHODS, WsRpcGroup } from "@t3tools/contracts";
+import {
+  KeybindingRule,
+  OpenError,
+  ResolvedKeybindingRule,
+  WS_METHODS,
+  WsRpcGroup,
+} from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
-import { assertEquals, assertFailure, assertInclude, assertTrue } from "@effect/vitest/utils";
+import { assertFailure, assertInclude, assertTrue } from "@effect/vitest/utils";
 import { Effect, FileSystem, Layer, Path, Stream } from "effect";
 import { HttpClient, HttpRouter, HttpServer } from "effect/unstable/http";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
@@ -13,6 +19,7 @@ import { ServerConfig } from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
 import { resolveAttachmentRelativePath } from "./attachmentPaths.ts";
 import { Keybindings, KeybindingsConfigError, type KeybindingsShape } from "./keybindings.ts";
+import { Open, type OpenShape } from "./open.ts";
 import { ProviderHealth, type ProviderHealthShape } from "./provider/Services/ProviderHealth.ts";
 
 const buildAppUnderTest = (options?: {
@@ -20,6 +27,7 @@ const buildAppUnderTest = (options?: {
   layers?: {
     keybindings?: Partial<KeybindingsShape>;
     providerHealth?: Partial<ProviderHealthShape>;
+    open?: Partial<OpenShape>;
   };
 }) =>
   Effect.gen(function* () {
@@ -57,6 +65,11 @@ const buildAppUnderTest = (options?: {
         Layer.mock(ProviderHealth)({
           getStatuses: Effect.succeed([]),
           ...options?.layers?.providerHealth,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(Open)({
+          ...options?.layers?.open,
         }),
       ),
       Layer.provide(layerConfig),
@@ -305,6 +318,114 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         String(result.failure.cause),
         "ENOENT: no such file or directory, scandir '/definitely/not/a/real/workspace/path'",
       );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc projects.writeFile", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspaceDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ws-project-write-" });
+
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.projectsWriteFile]({
+            cwd: workspaceDir,
+            relativePath: "nested/created.txt",
+            contents: "written-by-rpc",
+          }),
+        ),
+      );
+
+      assert.equal(response.relativePath, "nested/created.txt");
+      const persisted = yield* fs.readFileString(path.join(workspaceDir, "nested", "created.txt"));
+      assert.equal(persisted, "written-by-rpc");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc projects.writeFile errors", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const workspaceDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ws-project-write-" });
+
+      yield* buildAppUnderTest();
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.projectsWriteFile]({
+            cwd: workspaceDir,
+            relativePath: "../escape.txt",
+            contents: "nope",
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "ProjectWriteFileError");
+      assert.equal(
+        result.failure.message,
+        "Workspace file path must stay within the project root.",
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc shell.openInEditor", () =>
+    Effect.gen(function* () {
+      let openedInput: {
+        cwd: string;
+        editor: "cursor" | "vscode" | "zed" | "file-manager";
+      } | null = null;
+      yield* buildAppUnderTest({
+        layers: {
+          open: {
+            openInEditor: (input) =>
+              Effect.sync(() => {
+                openedInput = input;
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.shellOpenInEditor]({
+            cwd: "/tmp/project",
+            editor: "cursor",
+          }),
+        ),
+      );
+
+      assert.deepEqual(openedInput, { cwd: "/tmp/project", editor: "cursor" });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("routes websocket rpc shell.openInEditor errors", () =>
+    Effect.gen(function* () {
+      const openError = new OpenError({ message: "Editor command not found: cursor" });
+      yield* buildAppUnderTest({
+        layers: {
+          open: {
+            openInEditor: () => Effect.fail(openError),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[WS_METHODS.shellOpenInEditor]({
+            cwd: "/tmp/project",
+            editor: "cursor",
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertFailure(result, openError);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 });
