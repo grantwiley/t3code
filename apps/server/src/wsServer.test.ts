@@ -50,6 +50,7 @@ import type { GitCoreShape } from "./git/Services/GitCore.ts";
 import { GitCore } from "./git/Services/GitCore.ts";
 import { GitCommandError, GitManagerError } from "./git/Errors.ts";
 import { MigrationError } from "@effect/sql-sqlite-bun/SqliteMigrator";
+import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 
 interface PendingMessages {
   queue: unknown[];
@@ -449,6 +450,7 @@ describe("WebSocket Server", () => {
       Layer.provideMerge(providerHealthLayer),
       Layer.provideMerge(openLayer),
       Layer.provideMerge(serverConfigLayer),
+      Layer.provideMerge(AnalyticsService.layerTest),
       Layer.provideMerge(NodeServices.layer),
     );
     const runtimeServices = await Effect.runPromise(
@@ -894,9 +896,9 @@ describe("WebSocket Server", () => {
       ws,
       WS_CHANNELS.serverConfigUpdated,
       (push) =>
-        Array.isArray((push.data as { issues?: unknown[] }).issues) &&
-        Boolean((push.data as { issues: Array<{ kind: string }> }).issues[0]) &&
-        (push.data as { issues: Array<{ kind: string }> }).issues[0]!.kind ===
+        Array.isArray((push.data as unknown as { issues?: unknown[] }).issues) &&
+        Boolean((push.data as unknown as { issues: Array<{ kind: string }> }).issues[0]) &&
+        (push.data as unknown as { issues: Array<{ kind: string }> }).issues[0]!.kind ===
           "keybindings.malformed-config",
     );
     expect(malformedPush.data).toEqual({
@@ -909,8 +911,8 @@ describe("WebSocket Server", () => {
       ws,
       WS_CHANNELS.serverConfigUpdated,
       (push) =>
-        Array.isArray((push.data as { issues?: unknown[] }).issues) &&
-        (push.data as { issues: unknown[] }).issues.length === 0,
+        Array.isArray((push.data as unknown as { issues?: unknown[] }).issues) &&
+        (push.data as unknown as { issues: unknown[] }).issues.length === 0,
     );
     expect(successPush.data).toEqual({ issues: [], providers: defaultProviderStatuses });
   });
@@ -1578,6 +1580,7 @@ describe("WebSocket Server", () => {
       Effect.succeed({
         branches: [],
         isRepo: false,
+        hasOriginRemote: false,
       }),
     );
     const initRepo = vi.fn(() => Effect.void);
@@ -1640,7 +1643,12 @@ describe("WebSocket Server", () => {
 
     const status = vi.fn(() => Effect.succeed(statusResult));
     const runStackedAction = vi.fn(() => Effect.void as any);
-    const gitManager: GitManagerShape = { status, runStackedAction };
+    const gitManager: GitManagerShape = {
+      status,
+      runStackedAction,
+      resolvePullRequest: vi.fn(() => Effect.void as any),
+      preparePullRequestThread: vi.fn(() => Effect.void as any),
+    };
 
     server = await createTestServer({ cwd: "/test", gitManager });
     const addr = server.address();
@@ -1670,6 +1678,8 @@ describe("WebSocket Server", () => {
     const gitManager: GitManagerShape = {
       status: vi.fn(() => Effect.void as any),
       runStackedAction,
+      resolvePullRequest: vi.fn(() => Effect.void as any),
+      preparePullRequestThread: vi.fn(() => Effect.void as any),
     };
 
     server = await createTestServer({ cwd: "/test", gitManager });

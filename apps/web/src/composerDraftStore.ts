@@ -14,11 +14,53 @@ import {
   DEFAULT_RUNTIME_MODE,
   type ChatImageAttachment,
 } from "./types";
+import { Debouncer } from "@tanstack/react-pacer";
 import { create } from "zustand";
-import { createJSONStorage, persist } from "zustand/middleware";
+import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
 export type DraftThreadEnvMode = "local" | "worktree";
+
+const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
+
+interface DebouncedStorage extends StateStorage {
+  flush: () => void;
+}
+
+export function createDebouncedStorage(baseStorage: StateStorage): DebouncedStorage {
+  const debouncedSetItem = new Debouncer(
+    (name: string, value: string) => {
+      baseStorage.setItem(name, value);
+    },
+    { wait: COMPOSER_PERSIST_DEBOUNCE_MS },
+  );
+
+  return {
+    getItem: (name) => baseStorage.getItem(name),
+    setItem: (name, value) => {
+      debouncedSetItem.maybeExecute(name, value);
+    },
+    removeItem: (name) => {
+      debouncedSetItem.cancel();
+      baseStorage.removeItem(name);
+    },
+    flush: () => {
+      debouncedSetItem.flush();
+    },
+  };
+}
+
+const composerDebouncedStorage: DebouncedStorage =
+  typeof localStorage !== "undefined"
+    ? createDebouncedStorage(localStorage)
+    : { getItem: () => null, setItem: () => {}, removeItem: () => {}, flush: () => {} };
+
+// Flush pending composer draft writes before page unload to prevent data loss.
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", () => {
+    composerDebouncedStorage.flush();
+  });
+}
 
 export interface PersistedComposerImageAttachment {
   id: string;
@@ -1169,7 +1211,7 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
     {
       name: COMPOSER_DRAFT_STORAGE_KEY,
       version: 1,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(() => composerDebouncedStorage),
       partialize: (state) => {
         const persistedDraftsByThreadId: PersistedComposerDraftStoreState["draftsByThreadId"] = {};
         for (const [threadId, draft] of Object.entries(state.draftsByThreadId)) {
@@ -1239,4 +1281,21 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
 
 export function useComposerThreadDraft(threadId: ThreadId): ComposerThreadDraftState {
   return useComposerDraftStore((state) => state.draftsByThreadId[threadId] ?? EMPTY_THREAD_DRAFT);
+}
+
+/**
+ * Clear draft threads that have been promoted to server threads.
+ *
+ * Call this after a snapshot sync so the route guard in `_chat.$threadId`
+ * sees the server thread before the draft is removed — avoids a redirect
+ * to `/` caused by a gap where neither draft nor server thread exists.
+ */
+export function clearPromotedDraftThreads(serverThreadIds: ReadonlySet<ThreadId>): void {
+  const store = useComposerDraftStore.getState();
+  const draftThreadIds = Object.keys(store.draftThreadsByThreadId) as ThreadId[];
+  for (const draftId of draftThreadIds) {
+    if (serverThreadIds.has(draftId)) {
+      store.clearDraftThread(draftId);
+    }
+  }
 }

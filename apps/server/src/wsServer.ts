@@ -261,6 +261,10 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const providerStatuses = yield* providerHealth.getStatuses;
 
   const clients = yield* Ref.make(new Set<WebSocket>());
+  let pushSequenceCounter = 0;
+  function nextPushSequence() {
+    return pushSequenceCounter++;
+  }
   const logger = createLogger("ws");
 
   function logOutgoingPush(push: WsPush, recipients: number) {
@@ -288,6 +292,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const onTerminalEvent = Effect.fnUntraced(function* (event: TerminalEvent) {
     yield* broadcastPush({
       type: "push",
+      sequence: nextPushSequence(),
       channel: WS_CHANNELS.terminalEvent,
       data: event,
     });
@@ -576,14 +581,16 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   yield* Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
     broadcastPush({
       type: "push",
+      sequence: nextPushSequence(),
       channel: ORCHESTRATION_WS_CHANNELS.domainEvent,
       data: event,
     }),
   ).pipe(Effect.forkIn(subscriptionsScope));
 
-  yield* Stream.runForEach(keybindingsManager.changes, (event) =>
+  yield* Stream.runForEach(keybindingsManager.streamChanges, (event) =>
     broadcastPush({
       type: "push",
+      sequence: nextPushSequence(),
       channel: WS_CHANNELS.serverConfigUpdated,
       data: {
         issues: event.issues,
@@ -774,6 +781,16 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         return yield* gitManager.runStackedAction(body);
       }
 
+      case WS_METHODS.gitResolvePullRequest: {
+        const body = stripRequestTag(request.body);
+        return yield* gitManager.resolvePullRequest(body);
+      }
+
+      case WS_METHODS.gitPreparePullRequestThread: {
+        const body = stripRequestTag(request.body);
+        return yield* gitManager.preparePullRequestThread(body);
+      }
+
       case WS_METHODS.gitListBranches: {
         const body = stripRequestTag(request.body);
         return yield* git.listBranches(body);
@@ -933,6 +950,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
     const welcome: WsPush = {
       type: "push",
+      sequence: nextPushSequence(),
       channel: WS_CHANNELS.serverWelcome,
       data: {
         cwd,
