@@ -9,6 +9,8 @@
 import { Config, Data, Effect, FileSystem, Layer, Option, Path, Schema, ServiceMap } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { NetService } from "@t3tools/shared/Net";
+
+// Dummy comment.
 import {
   DEFAULT_PORT,
   resolveStaticDir,
@@ -20,12 +22,9 @@ import { fixPath, resolveStateDir } from "./os-jank";
 import { Open } from "./open";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
-import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { Server } from "./wsServer";
 import { ServerLoggerLive } from "./serverLogger";
-import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
-import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
@@ -200,7 +199,6 @@ const LayerLive = (input: CliInput) =>
     Layer.provideMerge(ProviderHealthLive),
     Layer.provideMerge(SqlitePersistence.layerConfig),
     Layer.provideMerge(ServerLoggerLive),
-    Layer.provideMerge(AnalyticsServiceLayerLive),
     Layer.provideMerge(ServerConfigLive(input)),
   );
 
@@ -209,31 +207,6 @@ const isWildcardHost = (host: string | undefined): boolean =>
 
 const formatHostForUrl = (host: string): string =>
   host.includes(":") && !host.startsWith("[") ? `[${host}]` : host;
-
-export const recordStartupHeartbeat = Effect.gen(function* () {
-  const analytics = yield* AnalyticsService;
-  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-
-  const { threadCount, projectCount } = yield* projectionSnapshotQuery.getSnapshot().pipe(
-    Effect.map((snapshot) => ({
-      threadCount: snapshot.threads.length,
-      projectCount: snapshot.projects.length,
-    })),
-    Effect.catch((cause) =>
-      Effect.logWarning("failed to gather startup snapshot for telemetry", { cause }).pipe(
-        Effect.as({
-          threadCount: 0,
-          projectCount: 0,
-        }),
-      ),
-    ),
-  );
-
-  yield* analytics.record("server.boot.heartbeat", {
-    threadCount,
-    projectCount,
-  });
-});
 
 const makeServerProgram = (input: CliInput) =>
   Effect.gen(function* () {
@@ -254,7 +227,6 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     yield* start;
-    yield* Effect.forkChild(recordStartupHeartbeat);
 
     const localUrl = `http://localhost:${config.port}`;
     const bindUrl =

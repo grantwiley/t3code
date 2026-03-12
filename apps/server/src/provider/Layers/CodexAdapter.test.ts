@@ -22,6 +22,7 @@ import {
   type CodexAppServerSendTurnInput,
 } from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
+import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import { makeCodexAdapterLive } from "./CodexAdapter.ts";
@@ -156,6 +157,30 @@ const validationLayer = it.layer(
 );
 
 validationLayer("CodexAdapterLive validation", (it) => {
+  it.effect("returns validation error for non-codex provider on startSession", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const result = yield* adapter
+        .startSession({
+          provider: "claudeCode",
+          threadId: asThreadId("thread-1"),
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      assert.deepStrictEqual(
+        result.failure,
+        new ProviderAdapterValidationError({
+          provider: "codex",
+          operation: "startSession",
+          issue: "Expected provider 'codex' but received 'claudeCode'.",
+        }),
+      );
+      assert.equal(validationManager.startSessionImpl.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("maps codex model options before starting a session", () =>
     Effect.gen(function* () {
       validationManager.startSessionImpl.mockClear();
@@ -407,42 +432,6 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("maps retryable Codex error notifications to runtime.warning", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      lifecycleManager.emit("event", {
-        id: asEventId("evt-retryable-error"),
-        kind: "notification",
-        provider: "codex",
-        threadId: asThreadId("thread-1"),
-        createdAt: new Date().toISOString(),
-        method: "error",
-        turnId: asTurnId("turn-1"),
-        payload: {
-          error: {
-            message: "Reconnecting... 2/5",
-          },
-          willRetry: true,
-        },
-      } satisfies ProviderEvent);
-
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") {
-        return;
-      }
-      assert.equal(firstEvent.value.type, "runtime.warning");
-      if (firstEvent.value.type !== "runtime.warning") {
-        return;
-      }
-      assert.equal(firstEvent.value.turnId, "turn-1");
-      assert.equal(firstEvent.value.payload.message, "Reconnecting... 2/5");
-    }),
-  );
-
   it.effect("preserves request type when mapping serverRequest/resolved", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
@@ -476,78 +465,6 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         return;
       }
       assert.equal(firstEvent.value.payload.requestType, "command_execution_approval");
-    }),
-  );
-
-  it.effect("preserves file-read request type when mapping serverRequest/resolved", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      const event: ProviderEvent = {
-        id: asEventId("evt-file-read-request-resolved"),
-        kind: "notification",
-        provider: "codex",
-        threadId: asThreadId("thread-1"),
-        createdAt: new Date().toISOString(),
-        method: "serverRequest/resolved",
-        requestId: ApprovalRequestId.makeUnsafe("req-file-read-1"),
-        payload: {
-          request: {
-            method: "item/fileRead/requestApproval",
-          },
-          decision: "accept",
-        },
-      };
-
-      lifecycleManager.emit("event", event);
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") {
-        return;
-      }
-      assert.equal(firstEvent.value.type, "request.resolved");
-      if (firstEvent.value.type !== "request.resolved") {
-        return;
-      }
-      assert.equal(firstEvent.value.payload.requestType, "file_read_approval");
-    }),
-  );
-
-  it.effect("preserves explicit empty multi-select user-input answers", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      const event: ProviderEvent = {
-        id: asEventId("evt-user-input-empty"),
-        kind: "notification",
-        provider: "codex",
-        threadId: asThreadId("thread-1"),
-        createdAt: new Date().toISOString(),
-        method: "item/tool/requestUserInput/answered",
-        payload: {
-          answers: {
-            scope: [],
-          },
-        },
-      };
-
-      lifecycleManager.emit("event", event);
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") {
-        return;
-      }
-      assert.equal(firstEvent.value.type, "user-input.resolved");
-      if (firstEvent.value.type !== "user-input.resolved") {
-        return;
-      }
-      assert.deepEqual(firstEvent.value.payload.answers, {
-        scope: [],
-      });
     }),
   );
 

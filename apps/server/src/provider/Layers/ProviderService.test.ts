@@ -42,7 +42,6 @@ import {
   makeSqlitePersistenceLive,
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
-import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 
 const asRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
@@ -52,7 +51,7 @@ const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
   readonly eventId: EventId;
-  readonly provider: "codex";
+  readonly provider: "codex" | "claudeCode" | "cursor";
   readonly createdAt: string;
   readonly threadId: ThreadId;
   readonly turnId?: string | undefined;
@@ -217,12 +216,15 @@ const sleep = (ms: number) =>
 
 function makeProviderServiceLayer() {
   const codex = makeFakeCodexAdapter();
+  const claude = makeFakeCodexAdapter("claudeCode");
   const registry: typeof ProviderAdapterRegistry.Service = {
     getByProvider: (provider) =>
       provider === "codex"
         ? Effect.succeed(codex.adapter)
+        : provider === "claudeCode"
+          ? Effect.succeed(claude.adapter)
         : Effect.fail(new ProviderUnsupportedError({ provider })),
-    listProviders: () => Effect.succeed(["codex"]),
+    listProviders: () => Effect.succeed(["codex", "claudeCode"]),
   };
 
   const providerAdapterLayer = Layer.succeed(ProviderAdapterRegistry, registry);
@@ -236,10 +238,8 @@ function makeProviderServiceLayer() {
       makeProviderServiceLive().pipe(
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
-        Layer.provideMerge(AnalyticsService.layerTest),
       ),
       directoryLayer,
-
       runtimeRepositoryLayer,
       NodeServices.layer,
     ),
@@ -247,6 +247,7 @@ function makeProviderServiceLayer() {
 
   return {
     codex,
+    claude,
     layer,
   };
 }
@@ -283,7 +284,6 @@ it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", (
     const providerLayer = makeProviderServiceLive().pipe(
       Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
       Layer.provide(directoryLayer),
-      Layer.provide(AnalyticsService.layerTest),
     );
 
     yield* Effect.gen(function* () {
@@ -342,7 +342,6 @@ it.effect(
       const firstProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
-        Layer.provide(AnalyticsService.layerTest),
       );
 
       const startedSession = yield* Effect.gen(function* () {
@@ -354,6 +353,11 @@ it.effect(
           runtimeMode: "full-access",
           threadId,
         });
+      }).pipe(Effect.provide(firstProviderLayer));
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        yield* provider.stopAll();
       }).pipe(Effect.provide(firstProviderLayer));
 
       const persistedAfterStopAll = yield* Effect.gen(function* () {
@@ -380,7 +384,6 @@ it.effect(
       const secondProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
-        Layer.provide(AnalyticsService.layerTest),
       );
 
       secondCodex.startSession.mockClear();
@@ -533,6 +536,29 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("routes explicit claudeCode provider session starts to the claude adapter", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+
+      const session = yield* provider.startSession(asThreadId("thread-claude"), {
+        provider: "claudeCode",
+        threadId: asThreadId("thread-claude"),
+        cwd: "/tmp/project-claude",
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(session.provider, "claudeCode");
+      assert.equal(routing.claude.startSession.mock.calls.length, 1);
+      const startInput = routing.claude.startSession.mock.calls[0]?.[0];
+      assert.equal(typeof startInput === "object" && startInput !== null, true);
+      if (startInput && typeof startInput === "object") {
+        const startPayload = startInput as { provider?: string; cwd?: string };
+        assert.equal(startPayload.provider, "claudeCode");
+        assert.equal(startPayload.cwd, "/tmp/project-claude");
+      }
+    }),
+  );
+
   it.effect("recovers stale sessions for sendTurn using persisted cwd", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
@@ -544,7 +570,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
       });
 
-      yield* routing.codex.stopAll();
+      yield* provider.stopAll();
       routing.codex.startSession.mockClear();
       routing.codex.sendTurn.mockClear();
 
@@ -573,7 +599,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("lists no sessions after adapter runtime clears", () =>
+  it.effect("stops all sessions and clears adapter runtime", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
 
@@ -588,7 +614,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
       });
 
-      yield* routing.codex.stopAll();
+      yield* provider.stopAll();
 
       const remaining = yield* provider.listSessions();
       assert.equal(remaining.length, 0);
@@ -634,6 +660,15 @@ routing.layer("ProviderServiceLive routing", (it) => {
           assert.equal(runtimePayload.lastError, null);
           assert.equal(runtimePayload.lastRuntimeEvent, "provider.sendTurn");
         }
+      }
+
+      yield* provider.stopAll();
+      const stoppedRuntime = yield* runtimeRepository.getByThreadId({
+        threadId: session.threadId,
+      });
+      assert.equal(Option.isSome(stoppedRuntime), true);
+      if (Option.isSome(stoppedRuntime)) {
+        assert.equal(stoppedRuntime.value.status, "stopped");
       }
     }),
   );

@@ -579,3 +579,75 @@ describe("createDebouncedStorage", () => {
     expect(base.setItem).toHaveBeenCalledWith("key", "v2");
   });
 });
+
+describe("composerDraftStore setProvider", () => {
+  const threadId = ThreadId.makeUnsafe("thread-provider");
+
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+  });
+
+  it("persists provider-only selection even when prompt/model are empty", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setProvider(threadId, "cursor");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.provider).toBe("cursor");
+  });
+
+  it("removes empty provider-only draft when provider is reset", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setProvider(threadId, "cursor");
+    store.setProvider(threadId, null);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});
+
+describe("composerDraftStore runtime and interaction settings", () => {
+  const threadId = ThreadId.makeUnsafe("thread-settings");
+
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+  });
+
+  it("stores runtime mode overrides in the composer draft", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setRuntimeMode(threadId, "approval-required");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.runtimeMode).toBe(
+      "approval-required",
+    );
+  });
+
+  it("stores interaction mode overrides in the composer draft", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setInteractionMode(threadId, "plan");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.interactionMode).toBe(
+      "plan",
+    );
+  });
+
+  it("removes empty settings-only drafts when overrides are cleared", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setRuntimeMode(threadId, "approval-required");
+    store.setInteractionMode(threadId, "plan");
+    store.setRuntimeMode(threadId, null);
+    store.setInteractionMode(threadId, null);
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});

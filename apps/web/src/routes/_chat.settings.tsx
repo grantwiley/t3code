@@ -12,7 +12,6 @@ import { ensureNativeApi } from "../nativeApi";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Switch } from "../components/ui/switch";
-import { APP_VERSION } from "../branding";
 import { SidebarInset } from "~/components/ui/sidebar";
 
 const THEME_OPTIONS = [
@@ -47,6 +46,13 @@ const MODEL_PROVIDER_SETTINGS: Array<{
     placeholder: "your-codex-model-slug",
     example: "gpt-6.7-codex-ultra-preview",
   },
+  {
+    provider: "claudeCode",
+    title: "Claude Code",
+    description: "Save additional Claude model slugs for the picker and `/model` command.",
+    placeholder: "your-claude-model-slug",
+    example: "claude-sonnet-5-0",
+  },
 ] as const;
 
 function getCustomModelsForProvider(
@@ -54,6 +60,10 @@ function getCustomModelsForProvider(
   provider: ProviderKind,
 ) {
   switch (provider) {
+    case "claudeCode":
+      return settings.customClaudeModels;
+    case "cursor":
+      return settings.customCursorModels;
     case "codex":
     default:
       return settings.customCodexModels;
@@ -65,6 +75,10 @@ function getDefaultCustomModelsForProvider(
   provider: ProviderKind,
 ) {
   switch (provider) {
+    case "claudeCode":
+      return defaults.customClaudeModels;
+    case "cursor":
+      return defaults.customCursorModels;
     case "codex":
     default:
       return defaults.customCodexModels;
@@ -73,6 +87,10 @@ function getDefaultCustomModelsForProvider(
 
 function patchCustomModels(provider: ProviderKind, models: string[]) {
   switch (provider) {
+    case "claudeCode":
+      return { customClaudeModels: models };
+    case "cursor":
+      return { customCursorModels: models };
     case "codex":
     default:
       return { customCodexModels: models };
@@ -89,6 +107,8 @@ function SettingsRouteView() {
     Record<ProviderKind, string>
   >({
     codex: "",
+    claudeCode: "",
+    cursor: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
@@ -122,62 +142,54 @@ function SettingsRouteView() {
       });
   }, [availableEditors, keybindingsConfigPath]);
 
-  const addCustomModel = useCallback(
-    (provider: ProviderKind) => {
-      const customModelInput = customModelInputByProvider[provider];
-      const customModels = getCustomModelsForProvider(settings, provider);
-      const normalized = normalizeModelSlug(customModelInput, provider);
-      if (!normalized) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "Enter a model slug.",
-        }));
-        return;
-      }
-      if (getModelOptions(provider).some((option) => option.slug === normalized)) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "That model is already built in.",
-        }));
-        return;
-      }
-      if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: `Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`,
-        }));
-        return;
-      }
-      if (customModels.includes(normalized)) {
-        setCustomModelErrorByProvider((existing) => ({
-          ...existing,
-          [provider]: "That custom model is already saved.",
-        }));
-        return;
-      }
-
-      updateSettings(patchCustomModels(provider, [...customModels, normalized]));
-      setCustomModelInputByProvider((existing) => ({
-        ...existing,
-        [provider]: "",
-      }));
+  const addCustomModel = useCallback((provider: ProviderKind) => {
+    const customModelInput = customModelInputByProvider[provider];
+    const customModels = getCustomModelsForProvider(settings, provider);
+    const normalized = normalizeModelSlug(customModelInput, provider);
+    if (!normalized) {
       setCustomModelErrorByProvider((existing) => ({
         ...existing,
-        [provider]: null,
+        [provider]: "Enter a model slug.",
       }));
-    },
-    [customModelInputByProvider, settings, updateSettings],
-  );
+      return;
+    }
+    if (getModelOptions(provider).some((option) => option.slug === normalized)) {
+      setCustomModelErrorByProvider((existing) => ({
+        ...existing,
+        [provider]: "That model is already built in.",
+      }));
+      return;
+    }
+    if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
+      setCustomModelErrorByProvider((existing) => ({
+        ...existing,
+        [provider]: `Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`,
+      }));
+      return;
+    }
+    if (customModels.includes(normalized)) {
+      setCustomModelErrorByProvider((existing) => ({
+        ...existing,
+        [provider]: "That custom model is already saved.",
+      }));
+      return;
+    }
+
+    updateSettings(patchCustomModels(provider, [...customModels, normalized]));
+    setCustomModelInputByProvider((existing) => ({
+      ...existing,
+      [provider]: "",
+    }));
+    setCustomModelErrorByProvider((existing) => ({
+      ...existing,
+      [provider]: null,
+    }));
+  }, [customModelInputByProvider, settings, updateSettings]);
 
   const removeCustomModel = useCallback(
     (provider: ProviderKind, slug: string) => {
       const customModels = getCustomModelsForProvider(settings, provider);
-      updateSettings(
-        patchCustomModels(
-          provider,
-          customModels.filter((model) => model !== slug),
-        ),
-      );
+      updateSettings(patchCustomModels(provider, customModels.filter((model) => model !== slug)));
       setCustomModelErrorByProvider((existing) => ({
         ...existing,
         [provider]: null,
@@ -286,17 +298,14 @@ function SettingsRouteView() {
                   </span>
                 </label>
 
-                <div className="flex flex-col gap-3 text-xs text-muted-foreground sm:flex-row sm:items-start sm:justify-between">
-                  <div className="min-w-0 flex-1">
-                    <p>Binary source</p>
-                    <p className="mt-1 break-all font-mono text-[11px] text-foreground">
-                      {codexBinaryPath || "PATH"}
-                    </p>
-                  </div>
+                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <p>
+                    Binary source:{" "}
+                    <span className="font-medium text-foreground">{codexBinaryPath || "PATH"}</span>
+                  </p>
                   <Button
                     size="xs"
                     variant="outline"
-                    className="self-start"
                     onClick={() =>
                       updateSettings({
                         codexBinaryPath: defaults.codexBinaryPath,
@@ -399,9 +408,10 @@ function SettingsRouteView() {
                                 variant="outline"
                                 onClick={() =>
                                   updateSettings(
-                                    patchCustomModels(provider, [
-                                      ...getDefaultCustomModelsForProvider(defaults, provider),
-                                    ]),
+                                    patchCustomModels(
+                                      provider,
+                                      [...getDefaultCustomModelsForProvider(defaults, provider)],
+                                    ),
                                   )
                                 }
                               >
@@ -563,24 +573,6 @@ function SettingsRouteView() {
                   </Button>
                 </div>
               ) : null}
-            </section>
-            <section className="rounded-2xl border border-border bg-card p-5">
-              <div className="mb-4">
-                <h2 className="text-sm font-medium text-foreground">About</h2>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Application version and environment information.
-                </p>
-              </div>
-
-              <div className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
-                <div>
-                  <p className="text-sm font-medium text-foreground">Version</p>
-                  <p className="text-xs text-muted-foreground">
-                    Current version of the application.
-                  </p>
-                </div>
-                <code className="text-xs font-medium text-muted-foreground">{APP_VERSION}</code>
-              </div>
             </section>
           </div>
         </div>

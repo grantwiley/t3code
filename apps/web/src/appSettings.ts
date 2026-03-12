@@ -9,6 +9,8 @@ const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
+  claudeCode: new Set(getModelOptions("claudeCode").map((option) => option.slug)),
+  cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
 };
 
 const AppSettingsSchema = Schema.Struct({
@@ -25,6 +27,12 @@ const AppSettingsSchema = Schema.Struct({
   customCodexModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),
   ),
+  customClaudeModels: Schema.Array(Schema.String).pipe(
+    Schema.withConstructorDefault(() => Option.some([])),
+  ),
+  customCursorModels: Schema.Array(Schema.String).pipe(
+    Schema.withConstructorDefault(() => Option.some([])),
+  ),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 export interface AppModelOption {
@@ -33,7 +41,16 @@ export interface AppModelOption {
   isCustom: boolean;
 }
 
-const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
+function normalizeAppSettings(settings: AppSettings): AppSettings {
+  return {
+    ...settings,
+    customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
+    customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeCode"),
+    customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
+  };
+}
+
+const DEFAULT_APP_SETTINGS = normalizeAppSettings(AppSettingsSchema.makeUnsafe({}));
 
 export function normalizeCustomModelSlugs(
   models: Iterable<string | null | undefined>,
@@ -133,6 +150,25 @@ export function resolveAppModelSelection(
   );
 }
 
+export function getSlashModelOptions(
+  provider: ProviderKind,
+  customModels: readonly string[],
+  query: string,
+  selectedModel?: string | null,
+): AppModelOption[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  const options = getAppModelOptions(provider, customModels, selectedModel);
+  if (!normalizedQuery) {
+    return options;
+  }
+
+  return options.filter((option) => {
+    const searchSlug = option.slug.toLowerCase();
+    const searchName = option.name.toLowerCase();
+    return searchSlug.includes(normalizedQuery) || searchName.includes(normalizedQuery);
+  });
+}
+
 export function useAppSettings() {
   const [settings, setSettings] = useLocalStorage(
     APP_SETTINGS_STORAGE_KEY,
@@ -142,10 +178,12 @@ export function useAppSettings() {
 
   const updateSettings = useCallback(
     (patch: Partial<AppSettings>) => {
-      setSettings((prev) => ({
-        ...prev,
-        ...patch,
-      }));
+      setSettings((prev) =>
+        normalizeAppSettings({
+          ...prev,
+          ...patch,
+        }),
+      );
     },
     [setSettings],
   );
@@ -155,7 +193,7 @@ export function useAppSettings() {
   }, [setSettings]);
 
   return {
-    settings,
+    settings: normalizeAppSettings(settings),
     updateSettings,
     resetSettings,
     defaults: DEFAULT_APP_SETTINGS,

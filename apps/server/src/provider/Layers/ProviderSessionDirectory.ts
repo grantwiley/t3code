@@ -2,7 +2,10 @@ import { type ProviderKind, type ThreadId } from "@t3tools/contracts";
 import { Effect, Layer, Option } from "effect";
 
 import { ProviderSessionRuntimeRepository } from "../../persistence/Services/ProviderSessionRuntime.ts";
-import { ProviderSessionDirectoryPersistenceError, ProviderValidationError } from "../Errors.ts";
+import {
+  ProviderSessionDirectoryPersistenceError,
+  ProviderValidationError,
+} from "../Errors.ts";
 import {
   ProviderSessionDirectory,
   type ProviderRuntimeBinding,
@@ -22,7 +25,7 @@ function decodeProviderKind(
   providerName: string,
   operation: string,
 ): Effect.Effect<ProviderKind, ProviderSessionDirectoryPersistenceError> {
-  if (providerName === "codex") {
+  if (providerName === "codex" || providerName === "claudeCode" || providerName === "cursor") {
     return Effect.succeed(providerName);
   }
   return Effect.fail(
@@ -92,15 +95,11 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
     }
 
     const now = new Date().toISOString();
-    const providerChanged =
-      existingRuntime !== undefined && existingRuntime.providerName !== binding.provider;
     yield* repository
       .upsert({
         threadId: resolvedThreadId,
         providerName: binding.provider,
-        adapterKey:
-          binding.adapterKey ??
-          (providerChanged ? binding.provider : (existingRuntime?.adapterKey ?? binding.provider)),
+        adapterKey: binding.adapterKey ?? existingRuntime?.adapterKey ?? binding.provider,
         runtimeMode: binding.runtimeMode ?? existingRuntime?.runtimeMode ?? "full-access",
         status: binding.status ?? existingRuntime?.status ?? "running",
         lastSeenAt: now,
@@ -135,9 +134,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
   const remove: ProviderSessionDirectoryShape["remove"] = (threadId) =>
     repository
       .deleteByThreadId({ threadId })
-      .pipe(
-        Effect.mapError(toPersistenceError("ProviderSessionDirectory.remove:deleteByThreadId")),
-      );
+      .pipe(Effect.mapError(toPersistenceError("ProviderSessionDirectory.remove:deleteByThreadId")));
 
   const listThreadIds: ProviderSessionDirectoryShape["listThreadIds"] = () =>
     repository.list().pipe(

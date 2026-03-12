@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   getAppModelOptions,
+  getSlashModelOptions,
   normalizeCustomModelSlugs,
   resolveAppModelSelection,
 } from "./appSettings";
@@ -18,6 +19,17 @@ describe("normalizeCustomModelSlugs", () => {
         null,
       ]),
     ).toEqual(["custom/internal-model"]);
+  });
+
+  it("normalizes provider-specific aliases for claude and cursor", () => {
+    expect(normalizeCustomModelSlugs(["sonnet"], "claudeCode")).toEqual([]);
+    expect(normalizeCustomModelSlugs(["claude/custom-sonnet"], "claudeCode")).toEqual([
+      "claude/custom-sonnet",
+    ]);
+    expect(normalizeCustomModelSlugs(["composer"], "cursor")).toEqual([]);
+    expect(normalizeCustomModelSlugs(["cursor/custom-model"], "cursor")).toEqual([
+      "cursor/custom-model",
+    ]);
   });
 });
 
@@ -44,6 +56,14 @@ describe("getAppModelOptions", () => {
       isCustom: true,
     });
   });
+
+  it("keeps a saved custom provider model available as an exact slug option", () => {
+    const options = getAppModelOptions("claudeCode", ["claude/custom-opus"], "claude/custom-opus");
+
+    expect(options.some((option) => option.slug === "claude/custom-opus" && option.isCustom)).toBe(
+      true,
+    );
+  });
 });
 
 describe("resolveAppModelSelection", () => {
@@ -55,5 +75,37 @@ describe("resolveAppModelSelection", () => {
 
   it("falls back to the provider default when no model is selected", () => {
     expect(resolveAppModelSelection("codex", [], "")).toBe("gpt-5.4");
+  });
+});
+
+describe("getSlashModelOptions", () => {
+  it("includes saved custom model slugs for /model command suggestions", () => {
+    const options = getSlashModelOptions(
+      "codex",
+      ["custom/internal-model"],
+      "",
+      "gpt-5.3-codex",
+    );
+
+    expect(options.some((option) => option.slug === "custom/internal-model")).toBe(true);
+  });
+
+  it("filters slash-model suggestions across built-in and custom model names", () => {
+    const options = getSlashModelOptions(
+      "codex",
+      ["openai/gpt-oss-120b"],
+      "oss",
+      "gpt-5.3-codex",
+    );
+
+    expect(options.map((option) => option.slug)).toEqual(["openai/gpt-oss-120b"]);
+  });
+
+  it("includes provider-specific custom slugs in non-codex model lists", () => {
+    const claudeOptions = getAppModelOptions("claudeCode", ["claude/custom-opus"]);
+    const cursorOptions = getAppModelOptions("cursor", ["cursor/custom-model"]);
+
+    expect(claudeOptions.some((option) => option.slug === "claude/custom-opus")).toBe(true);
+    expect(cursorOptions.some((option) => option.slug === "cursor/custom-model")).toBe(true);
   });
 });

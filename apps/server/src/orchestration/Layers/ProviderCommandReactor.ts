@@ -5,19 +5,17 @@ import {
   type OrchestrationEvent,
   type ProviderModelOptions,
   type ProviderKind,
-  type ProviderStartOptions,
   type OrchestrationSession,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
-import { Cache, Cause, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { Cache, Cause, Duration, Effect, Layer, Option, Queue, Schema, Stream } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
-import { ProviderAdapterRequestError, ProviderServiceError } from "../../provider/Errors.ts";
+import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -74,8 +72,18 @@ const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const WORKTREE_BRANCH_PREFIX = "t3code";
 const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(`^${WORKTREE_BRANCH_PREFIX}\\/[0-9a-f]{8}$`);
 
-function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderServiceError>): boolean {
-  const error = Cause.squash(cause);
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message;
+  }
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function isUnknownPendingApprovalRequestError(error: unknown): boolean {
   if (Schema.is(ProviderAdapterRequestError)(error)) {
     const detail = error.detail.toLowerCase();
     return (
@@ -83,7 +91,7 @@ function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderService
       detail.includes("unknown pending permission request")
     );
   }
-  const message = Cause.pretty(cause);
+  const message = toErrorMessage(error).toLowerCase();
   return (
     message.includes("unknown pending approval request") ||
     message.includes("unknown pending permission request")
@@ -134,8 +142,6 @@ const make = Effect.gen(function* () {
         Cache.set(handledTurnStartKeys, key, true).pipe(Effect.as(Option.isSome(cached))),
       ),
     );
-
-  const threadProviderOptions = new Map<string, ProviderStartOptions>();
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -195,7 +201,6 @@ const make = Effect.gen(function* () {
       readonly provider?: ProviderKind;
       readonly model?: string;
       readonly modelOptions?: ProviderModelOptions;
-      readonly providerOptions?: ProviderStartOptions;
     },
   ) {
     const readModel = yield* orchestrationEngine.getReadModel();
@@ -206,7 +211,11 @@ const make = Effect.gen(function* () {
 
     const desiredRuntimeMode = thread.runtimeMode;
     const currentProvider: ProviderKind | undefined =
-      thread.session?.providerName === "codex" ? thread.session.providerName : undefined;
+      thread.session?.providerName === "codex" ||
+      thread.session?.providerName === "claudeCode" ||
+      thread.session?.providerName === "cursor"
+        ? thread.session.providerName
+        : undefined;
     const preferredProvider: ProviderKind | undefined = options?.provider ?? currentProvider;
     const desiredModel = options?.model ?? thread.model;
     const effectiveCwd = resolveThreadWorkspaceCwd({
@@ -215,9 +224,9 @@ const make = Effect.gen(function* () {
     });
 
     const resolveActiveSession = (threadId: ThreadId) =>
-      providerService
-        .listSessions()
-        .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
+      providerService.listSessions().pipe(
+        Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)),
+      );
 
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
@@ -225,15 +234,12 @@ const make = Effect.gen(function* () {
     }) =>
       providerService.startSession(threadId, {
         threadId,
-        ...((input?.provider ?? preferredProvider)
+        ...(input?.provider ?? preferredProvider
           ? { provider: input?.provider ?? preferredProvider }
           : {}),
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
         ...(desiredModel ? { model: desiredModel } : {}),
         ...(options?.modelOptions !== undefined ? { modelOptions: options.modelOptions } : {}),
-        ...(options?.providerOptions !== undefined
-          ? { providerOptions: options.providerOptions }
-          : {}),
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
       });
@@ -258,15 +264,16 @@ const make = Effect.gen(function* () {
       thread.session && thread.session.status !== "stopped" ? thread.id : null;
     if (existingSessionThreadId) {
       const runtimeModeChanged = thread.runtimeMode !== thread.session?.runtimeMode;
-      const providerChanged =
-        options?.provider !== undefined && options.provider !== currentProvider;
+      const providerChanged = options?.provider !== undefined && options.provider !== currentProvider;
       const activeSession = yield* resolveActiveSession(existingSessionThreadId);
       const sessionModelSwitch =
         currentProvider === undefined
           ? "in-session"
           : (yield* providerService.getCapabilities(currentProvider)).sessionModelSwitch;
-      const modelChanged = options?.model !== undefined && options.model !== activeSession?.model;
-      const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
+      const modelChanged =
+        options?.model !== undefined && options.model !== activeSession?.model;
+      const shouldRestartForModelChange =
+        modelChanged && sessionModelSwitch === "restart-session";
 
       if (!runtimeModeChanged && !providerChanged && !shouldRestartForModelChange) {
         return existingSessionThreadId;
@@ -318,7 +325,6 @@ const make = Effect.gen(function* () {
     readonly provider?: ProviderKind;
     readonly model?: string;
     readonly modelOptions?: ProviderModelOptions;
-    readonly providerOptions?: ProviderStartOptions;
     readonly interactionMode?: "default" | "plan";
     readonly createdAt: string;
   }) {
@@ -326,27 +332,22 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
-    if (input.providerOptions !== undefined) {
-      threadProviderOptions.set(input.threadId, input.providerOptions);
-    }
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.provider !== undefined ? { provider: input.provider } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.modelOptions !== undefined ? { modelOptions: input.modelOptions } : {}),
-      ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
     });
     const normalizedInput = toNonEmptyProviderInput(input.messageText);
     const normalizedAttachments = input.attachments ?? [];
-    const activeSession = yield* providerService
-      .listSessions()
-      .pipe(
-        Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
-      );
+    const activeSession = yield* providerService.listSessions().pipe(
+      Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
+    );
     const sessionModelSwitch =
       activeSession === undefined
         ? "in-session"
         : (yield* providerService.getCapabilities(activeSession.provider)).sessionModelSwitch;
-    const modelForTurn = sessionModelSwitch === "unsupported" ? activeSession?.model : input.model;
+    const modelForTurn =
+      sessionModelSwitch === "unsupported" ? activeSession?.model : input.model;
 
     yield* providerService.sendTurn({
       threadId: input.threadId,
@@ -467,12 +468,7 @@ const make = Effect.gen(function* () {
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
       ...(event.payload.provider !== undefined ? { provider: event.payload.provider } : {}),
       ...(event.payload.model !== undefined ? { model: event.payload.model } : {}),
-      ...(event.payload.modelOptions !== undefined
-        ? { modelOptions: event.payload.modelOptions }
-        : {}),
-      ...(event.payload.providerOptions !== undefined
-        ? { providerOptions: event.payload.providerOptions }
-        : {}),
+      ...(event.payload.modelOptions !== undefined ? { modelOptions: event.payload.modelOptions } : {}),
       interactionMode: event.payload.interactionMode,
       createdAt: event.payload.createdAt,
     });
@@ -530,17 +526,19 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
+            const error = Cause.squash(cause);
+            const detail = toErrorMessage(error);
             yield* appendProviderFailureActivity({
               threadId: event.payload.threadId,
               kind: "provider.approval.respond.failed",
               summary: "Provider approval response failed",
-              detail: Cause.pretty(cause),
+              detail,
               turnId: null,
               createdAt: event.payload.createdAt,
               requestId: event.payload.requestId,
             });
 
-            if (!isUnknownPendingApprovalRequestError(cause)) return;
+            if (!isUnknownPendingApprovalRequestError(error)) return;
           }),
         ),
       );
@@ -574,14 +572,17 @@ const make = Effect.gen(function* () {
       })
       .pipe(
         Effect.catchCause((cause) =>
-          appendProviderFailureActivity({
-            threadId: event.payload.threadId,
-            kind: "provider.user-input.respond.failed",
-            summary: "Provider user input response failed",
-            detail: Cause.pretty(cause),
-            turnId: null,
-            createdAt: event.payload.createdAt,
-            requestId: event.payload.requestId,
+          Effect.gen(function* () {
+            const error = Cause.squash(cause);
+            yield* appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.user-input.respond.failed",
+              summary: "Provider user input response failed",
+              detail: toErrorMessage(error),
+              turnId: null,
+              createdAt: event.payload.createdAt,
+              requestId: event.payload.requestId,
+            });
           }),
         ),
       );
@@ -623,14 +624,7 @@ const make = Effect.gen(function* () {
           if (!thread?.session || thread.session.status === "stopped") {
             return;
           }
-          const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
-          yield* ensureSessionForThread(
-            event.payload.threadId,
-            event.occurredAt,
-            cachedProviderOptions !== undefined
-              ? { providerOptions: cachedProviderOptions }
-              : undefined,
-          );
+          yield* ensureSessionForThread(event.payload.threadId, event.occurredAt);
           return;
         }
         case "thread.turn-start-requested":
@@ -664,28 +658,34 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processDomainEventSafely);
+  const start: ProviderCommandReactorShape["start"] = Effect.gen(function* () {
+    const queue = yield* Queue.unbounded<ProviderIntentEvent>();
+    yield* Effect.addFinalizer(() => Queue.shutdown(queue).pipe(Effect.asVoid));
 
-  const start: ProviderCommandReactorShape["start"] = Effect.forkScoped(
-    Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-      if (
-        event.type !== "thread.runtime-mode-set" &&
-        event.type !== "thread.turn-start-requested" &&
-        event.type !== "thread.turn-interrupt-requested" &&
-        event.type !== "thread.approval-response-requested" &&
-        event.type !== "thread.user-input-response-requested" &&
-        event.type !== "thread.session-stop-requested"
-      ) {
-        return Effect.void;
-      }
+    yield* Effect.forkScoped(
+      Effect.forever(Queue.take(queue).pipe(Effect.flatMap(processDomainEventSafely))),
+    );
 
-      return worker.enqueue(event);
-    }),
-  ).pipe(Effect.asVoid);
+    yield* Effect.forkScoped(
+      Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+        if (
+          event.type !== "thread.runtime-mode-set" &&
+          event.type !== "thread.turn-start-requested" &&
+          event.type !== "thread.turn-interrupt-requested" &&
+          event.type !== "thread.approval-response-requested" &&
+          event.type !== "thread.user-input-response-requested" &&
+          event.type !== "thread.session-stop-requested"
+        ) {
+          return Effect.void;
+        }
+
+        return Queue.offer(queue, event).pipe(Effect.asVoid);
+      }),
+    );
+  });
 
   return {
     start,
-    drain: worker.drain,
   } satisfies ProviderCommandReactorShape;
 });
 
