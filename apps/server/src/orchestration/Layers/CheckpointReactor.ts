@@ -7,7 +7,8 @@ import {
   type OrchestrationEvent,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
-import { Cause, Effect, Layer, Option, Queue, Stream } from "effect";
+import { Cause, Effect, Layer, Option, Stream } from "effect";
+import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { parseTurnDiffFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import {
@@ -574,24 +575,20 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  const worker = yield* makeDrainableWorker(processInputSafely);
+
   const start: CheckpointReactorShape["start"] = Effect.gen(function* () {
-    const queue = yield* Queue.unbounded<ReactorInput>();
-    yield* Effect.addFinalizer(() => Queue.shutdown(queue).pipe(Effect.asVoid));
-
-    yield* Effect.forkScoped(
-      Effect.forever(Queue.take(queue).pipe(Effect.flatMap(processInputSafely))),
-    );
-
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
         if (
           event.type !== "thread.turn-start-requested" &&
           event.type !== "thread.message-sent" &&
-          event.type !== "thread.checkpoint-revert-requested"
+          event.type !== "thread.checkpoint-revert-requested" &&
+          event.type !== "thread.turn-diff-completed"
         ) {
           return Effect.void;
         }
-        return Queue.offer(queue, { source: "domain", event }).pipe(Effect.asVoid);
+        return worker.enqueue({ source: "domain", event });
       }),
     );
 
@@ -600,13 +597,14 @@ const make = Effect.gen(function* () {
         if (event.type !== "turn.started" && event.type !== "turn.completed") {
           return Effect.void;
         }
-        return Queue.offer(queue, { source: "runtime", event }).pipe(Effect.asVoid);
+        return worker.enqueue({ source: "runtime", event });
       }),
     );
   });
 
   return {
     start,
+    drain: worker.drain,
   } satisfies CheckpointReactorShape;
 });
 
