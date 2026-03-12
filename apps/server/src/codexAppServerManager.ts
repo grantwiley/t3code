@@ -22,12 +22,6 @@ import {
 import { normalizeModelSlug } from "@t3tools/shared/model";
 import { Effect, ServiceMap } from "effect";
 
-import {
-  formatCodexCliUpgradeMessage,
-  isCodexCliVersionSupported,
-  parseCodexCliVersion,
-} from "./provider/codexCliVersion";
-
 type PendingRequestKey = string;
 
 interface PendingRequest {
@@ -40,10 +34,7 @@ interface PendingRequest {
 interface PendingApprovalRequest {
   requestId: ApprovalRequestId;
   jsonRpcId: string | number;
-  method:
-    | "item/commandExecution/requestApproval"
-    | "item/fileChange/requestApproval"
-    | "item/fileRead/requestApproval";
+  method: "item/commandExecution/requestApproval" | "item/fileChange/requestApproval";
   requestKind: ProviderRequestKind;
   threadId: ThreadId;
   turnId?: TurnId;
@@ -64,7 +55,6 @@ interface CodexUserInputAnswer {
 
 interface CodexSessionContext {
   session: ProviderSession;
-  account: CodexAccountSnapshot;
   child: ChildProcessWithoutNullStreams;
   output: readline.Interface;
   pending: Map<PendingRequestKey, PendingRequest>;
@@ -96,30 +86,13 @@ interface JsonRpcNotification {
   params?: unknown;
 }
 
-type CodexPlanType =
-  | "free"
-  | "go"
-  | "plus"
-  | "pro"
-  | "team"
-  | "business"
-  | "enterprise"
-  | "edu"
-  | "unknown";
-
-interface CodexAccountSnapshot {
-  readonly type: "apiKey" | "chatgpt" | "unknown";
-  readonly planType: CodexPlanType | null;
-  readonly sparkEnabled: boolean;
-}
-
 export interface CodexAppServerSendTurnInput {
   readonly threadId: ThreadId;
   readonly input?: string;
   readonly attachments?: ReadonlyArray<{ type: "image"; url: string }>;
   readonly model?: string;
-  readonly serviceTier?: string | null;
   readonly effort?: string;
+  readonly serviceTier?: string;
   readonly interactionMode?: ProviderInteractionMode;
 }
 
@@ -144,8 +117,6 @@ export interface CodexThreadSnapshot {
   turns: CodexThreadTurnSnapshot[];
 }
 
-const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
-
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
 const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
 const CODEX_STDERR_LOG_REGEX =
@@ -161,50 +132,6 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "unknown thread",
   "does not exist",
 ];
-const CODEX_DEFAULT_MODEL = "gpt-5.3-codex";
-const CODEX_SPARK_MODEL = "gpt-5.3-codex-spark";
-const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
-
-function asObject(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
-
-function asString(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapshot {
-  const record = asObject(response);
-  const account = asObject(record?.account) ?? record;
-  const accountType = asString(account?.type);
-
-  if (accountType === "apiKey") {
-    return {
-      type: "apiKey",
-      planType: null,
-      sparkEnabled: true,
-    };
-  }
-
-  if (accountType === "chatgpt") {
-    const planType = (account?.planType as CodexPlanType | null) ?? "unknown";
-    return {
-      type: "chatgpt",
-      planType,
-      sparkEnabled: !CODEX_SPARK_DISABLED_PLAN_TYPES.has(planType),
-    };
-  }
-
-  return {
-    type: "unknown",
-    planType: null,
-    sparkEnabled: true,
-  };
-}
-
 export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
 
 You work in 3 phases, and you should *chat your way* to a great plan before finalizing it. A great plan is very detailed-intent- and implementation-wise-so that it can be handed to another engineer or agent to be implemented right away. It must be **decision complete**, where the implementer does not need to make any decisions.
@@ -327,19 +254,6 @@ Do not ask "should I proceed?" in the final output. The user can easily switch o
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
 </collaboration_mode>`;
 
-export const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
-
-You are now in Default mode. Any previous instructions for other modes (e.g. Plan mode) are no longer active.
-
-Your active mode changes only when new developer instructions with a different \`<collaboration_mode>...</collaboration_mode>\` change it; user requests or tool descriptions do not change mode by themselves. Known mode names are Default and Plan.
-
-## request_user_input availability
-
-The \`request_user_input\` tool is unavailable in Default mode. If you call it while in Default mode, it will return an error.
-
-In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
-</collaboration_mode>`;
-
 function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
   readonly approvalPolicy: "on-request" | "never";
   readonly sandbox: "workspace-write" | "danger-full-access";
@@ -355,17 +269,6 @@ function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
     approvalPolicy: "never",
     sandbox: "danger-full-access",
   };
-}
-
-export function resolveCodexModelForAccount(
-  model: string | undefined,
-  account: CodexAccountSnapshot,
-): string | undefined {
-  if (model !== CODEX_SPARK_MODEL || account.sparkEnabled) {
-    return model;
-  }
-
-  return CODEX_DEFAULT_MODEL;
 }
 
 /**
@@ -420,7 +323,7 @@ function buildCodexCollaborationMode(input: {
   readonly effort?: string;
 }):
   | {
-      mode: "default" | "plan";
+      mode: "plan";
       settings: {
         model: string;
         reasoning_effort: string;
@@ -428,19 +331,16 @@ function buildCodexCollaborationMode(input: {
       };
     }
   | undefined {
-  if (input.interactionMode === undefined) {
+  if (input.interactionMode !== "plan") {
     return undefined;
   }
   const model = normalizeCodexModelSlug(input.model) ?? "gpt-5.3-codex";
   return {
-    mode: input.interactionMode,
+    mode: "plan",
     settings: {
       model,
       reasoning_effort: input.effort ?? "medium",
-      developer_instructions:
-        input.interactionMode === "plan"
-          ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
-          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+      developer_instructions: CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
     },
   };
 }
@@ -452,14 +352,18 @@ function toCodexUserInputAnswer(value: unknown): CodexUserInputAnswer {
 
   if (Array.isArray(value)) {
     const answers = value.filter((entry): entry is string => typeof entry === "string");
-    return { answers };
+    if (answers.length > 0) {
+      return { answers };
+    }
   }
 
   if (value && typeof value === "object") {
     const maybeAnswers = (value as { answers?: unknown }).answers;
     if (Array.isArray(maybeAnswers)) {
       const answers = maybeAnswers.filter((entry): entry is string => typeof entry === "string");
-      return { answers };
+      if (answers.length > 0) {
+        return { answers };
+      }
     }
   }
 
@@ -543,11 +447,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const codexOptions = readCodexProviderOptions(input);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
-      this.assertSupportedCodexCliVersion({
-        binaryPath: codexBinaryPath,
-        cwd: resolvedCwd,
-        ...(codexHomePath ? { homePath: codexHomePath } : {}),
-      });
       const child = spawn(codexBinaryPath, ["app-server"], {
         cwd: resolvedCwd,
         env: {
@@ -561,11 +460,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       context = {
         session,
-        account: {
-          type: "unknown",
-          planType: null,
-          sparkEnabled: true,
-        },
         child,
         output,
         pending: new Map(),
@@ -583,33 +477,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
 
       this.writeMessage(context, { method: "initialized" });
-      try {
-        const modelListResponse = await this.sendRequest(context, "model/list", {});
-        console.log("codex model/list response", modelListResponse);
-      } catch (error) {
-        console.log("codex model/list failed", error);
-      }
-      try {
-        const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        console.log("codex account/read response", accountReadResponse);
-        context.account = readCodexAccountSnapshot(accountReadResponse);
-        console.log("codex subscription status", {
-          type: context.account.type,
-          planType: context.account.planType,
-          sparkEnabled: context.account.sparkEnabled,
-        });
-      } catch (error) {
-        console.log("codex account/read failed", error);
-      }
 
-      const normalizedModel = resolveCodexModelForAccount(
-        normalizeCodexModelSlug(input.model),
-        context.account,
-      );
+      const normalizedModel = normalizeCodexModelSlug(input.model);
       const sessionOverrides = {
         model: normalizedModel ?? null,
-        ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
         cwd: input.cwd ?? null,
+        ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
         ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
       };
 
@@ -769,10 +642,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         { type: "text"; text: string; text_elements: [] } | { type: "image"; url: string }
       >;
       model?: string;
-      serviceTier?: string | null;
       effort?: string;
+      serviceTier?: string;
       collaborationMode?: {
-        mode: "default" | "plan";
+        mode: "plan";
         settings: {
           model: string;
           reasoning_effort: string;
@@ -783,18 +656,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       threadId: providerThreadId,
       input: turnInput,
     };
-    const normalizedModel = resolveCodexModelForAccount(
-      normalizeCodexModelSlug(input.model ?? context.session.model),
-      context.account,
-    );
+    const normalizedModel = normalizeCodexModelSlug(input.model ?? context.session.model);
     if (normalizedModel) {
       turnStartParams.model = normalizedModel;
     }
-    if (input.serviceTier !== undefined) {
-      turnStartParams.serviceTier = input.serviceTier;
-    }
     if (input.effort) {
       turnStartParams.effort = input.effort;
+    }
+    if (input.serviceTier) {
+      turnStartParams.serviceTier = input.serviceTier;
     }
     const collaborationMode = buildCodexCollaborationMode({
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
@@ -1194,9 +1064,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         method:
           requestKind === "command"
             ? "item/commandExecution/requestApproval"
-            : requestKind === "file-read"
-              ? "item/fileRead/requestApproval"
-              : "item/fileChange/requestApproval",
+            : "item/fileChange/requestApproval",
         requestKind,
         threadId: context.session.threadId,
         ...(route.turnId ? { turnId: route.turnId } : {}),
@@ -1331,14 +1199,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private emitEvent(event: ProviderEvent): void {
     this.emit("event", event);
-  }
-
-  private assertSupportedCodexCliVersion(input: {
-    readonly binaryPath: string;
-    readonly cwd: string;
-    readonly homePath?: string;
-  }): void {
-    assertSupportedCodexCliVersion(input);
   }
 
   private updateSession(context: CodexSessionContext, updates: Partial<ProviderSession>): void {
@@ -1519,51 +1379,6 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
     ...(options.binaryPath ? { binaryPath: options.binaryPath } : {}),
     ...(options.homePath ? { homePath: options.homePath } : {}),
   };
-}
-
-function assertSupportedCodexCliVersion(input: {
-  readonly binaryPath: string;
-  readonly cwd: string;
-  readonly homePath?: string;
-}): void {
-  const result = spawnSync(input.binaryPath, ["--version"], {
-    cwd: input.cwd,
-    env: {
-      ...process.env,
-      ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
-    },
-    encoding: "utf8",
-    shell: process.platform === "win32",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
-    maxBuffer: 1024 * 1024,
-  });
-
-  if (result.error) {
-    const lower = result.error.message.toLowerCase();
-    if (
-      lower.includes("enoent") ||
-      lower.includes("command not found") ||
-      lower.includes("not found")
-    ) {
-      throw new Error(`Codex CLI (${input.binaryPath}) is not installed or not executable.`);
-    }
-    throw new Error(
-      `Failed to execute Codex CLI version check: ${result.error.message || String(result.error)}`,
-    );
-  }
-
-  const stdout = result.stdout ?? "";
-  const stderr = result.stderr ?? "";
-  if (result.status !== 0) {
-    const detail = stderr.trim() || stdout.trim() || `Command exited with code ${result.status}.`;
-    throw new Error(`Codex CLI version check failed. ${detail}`);
-  }
-
-  const parsedVersion = parseCodexCliVersion(`${stdout}\n${stderr}`);
-  if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
-    throw new Error(formatCodexCliUpgradeMessage(parsedVersion));
-  }
 }
 
 function readResumeCursorThreadId(resumeCursor: unknown): string | undefined {
