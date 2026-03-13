@@ -41,7 +41,7 @@ const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
   readonly eventId: EventId;
-  readonly provider: "codex" | "claudeCode" | "cursor";
+  readonly provider: "codex" | "claudeCode" | "cursor" | "pi";
   readonly createdAt: string;
   readonly threadId: ThreadId;
   readonly turnId?: string | undefined;
@@ -1160,6 +1160,12 @@ describe("ProviderRuntimeIngestion", () => {
         status: "in_progress",
         title: "Read file",
         detail: "/tmp/file.ts",
+        data: {
+          toolName: "Read",
+          input: {
+            file_path: "/tmp/file.ts",
+          },
+        },
       },
     });
 
@@ -1179,6 +1185,20 @@ describe("ProviderRuntimeIngestion", () => {
         (activity: ProviderRuntimeTestActivity) => activity.kind === "tool.started",
       ),
     ).toBe(true);
+    expect(
+      thread.activities.find(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "tool.started",
+      )?.payload,
+    ).toEqual({
+      itemType: "command_execution",
+      detail: "/tmp/file.ts",
+      data: {
+        toolName: "Read",
+        input: {
+          file_path: "/tmp/file.ts",
+        },
+      },
+    });
   });
 
   it("consumes P1 runtime events into thread metadata, diff checkpoints, and activities", async () => {

@@ -44,6 +44,10 @@ import { makeSqlitePersistenceLive, SqlitePersistenceMemory } from "./persistenc
 import { SqlClient, SqlError } from "effect/unstable/sql";
 import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService";
 import { ProviderHealth, type ProviderHealthShape } from "./provider/Services/ProviderHealth";
+import {
+  ProviderModelCatalog,
+  type ProviderModelCatalogShape,
+} from "./provider/Services/ProviderModelCatalog.ts";
 import { Open, type OpenShape } from "./open";
 import { GitManager, type GitManagerShape } from "./git/Services/GitManager.ts";
 import type { GitCoreShape } from "./git/Services/GitCore.ts";
@@ -81,6 +85,10 @@ const defaultProviderStatuses: ReadonlyArray<ServerProviderStatus> = [
 
 const defaultProviderHealthService: ProviderHealthShape = {
   getStatuses: Effect.succeed(defaultProviderStatuses),
+};
+
+const defaultProviderModelCatalogService: ProviderModelCatalogShape = {
+  listModels: () => Effect.succeed([]),
 };
 
 class MockTerminalManager implements TerminalManagerShape {
@@ -392,6 +400,7 @@ describe("WebSocket Server", () => {
       staticDir?: string;
       providerLayer?: Layer.Layer<ProviderService, never>;
       providerHealth?: ProviderHealthShape;
+      providerModelCatalog?: ProviderModelCatalogShape;
       open?: OpenShape;
       gitManager?: GitManagerShape;
       gitCore?: Pick<
@@ -412,6 +421,10 @@ describe("WebSocket Server", () => {
     const providerHealthLayer = Layer.succeed(
       ProviderHealth,
       options.providerHealth ?? defaultProviderHealthService,
+    );
+    const providerModelCatalogLayer = Layer.succeed(
+      ProviderModelCatalog,
+      options.providerModelCatalog ?? defaultProviderModelCatalogService,
     );
     const openLayer = Layer.succeed(Open, options.open ?? defaultOpenService);
     const serverConfigLayer = Layer.succeed(ServerConfig, {
@@ -440,7 +453,9 @@ describe("WebSocket Server", () => {
     );
     const runtimeLayer = Layer.merge(
       Layer.merge(
-        makeServerRuntimeServicesLayer().pipe(Layer.provide(infrastructureLayer)),
+        makeServerRuntimeServicesLayer({
+          providerModelCatalogLayer,
+        }).pipe(Layer.provide(infrastructureLayer)),
         infrastructureLayer,
       ),
       runtimeOverrides,
@@ -761,6 +776,36 @@ describe("WebSocket Server", () => {
       availableEditors: expect.any(Array),
     });
     expectAvailableEditors((response.result as { availableEditors: unknown }).availableEditors);
+  });
+
+  it("responds to server.listProviderModels", async () => {
+    const stateDir = makeTempDir("t3code-state-provider-models-");
+    server = await createTestServer({
+      cwd: "/my/workspace",
+      stateDir,
+      providerModelCatalog: {
+        listModels: ({ provider }) =>
+          Effect.succeed(
+            provider === "pi"
+              ? [{ slug: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6 · Anthropic" }]
+              : [],
+          ),
+      },
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const ws = await connectWs(port);
+    connections.push(ws);
+    await waitForMessage(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.serverListProviderModels, {
+      provider: "pi",
+    });
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual({
+      models: [{ slug: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6 · Anthropic" }],
+    });
   });
 
   it("bootstraps default keybindings file when missing", async () => {

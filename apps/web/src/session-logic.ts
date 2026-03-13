@@ -19,6 +19,7 @@ export const PROVIDER_OPTIONS: Array<{
 }> = [
   { value: "codex", label: "Codex", available: true },
   { value: "claudeCode", label: "Claude Code", available: true },
+  { value: "pi", label: "Pi", available: true },
   { value: "cursor", label: "Cursor", available: false },
 ];
 
@@ -29,6 +30,14 @@ export interface WorkLogEntry {
   detail?: string;
   command?: string;
   changedFiles?: ReadonlyArray<string>;
+  toolCall?: {
+    name: string;
+    status: "started" | "updated" | "completed";
+    inputSummary?: ReadonlyArray<{
+      label: string;
+      value: string;
+    }>;
+  };
   tone: "thinking" | "tool" | "info" | "error";
   activityKind: string;
   task?: {
@@ -418,8 +427,10 @@ export function deriveWorkLogEntries(
         activity.payload && typeof activity.payload === "object"
           ? (activity.payload as Record<string, unknown>)
           : null;
+      const itemType = asTrimmedString(payload?.itemType) ?? undefined;
+      const toolCall = extractToolCall(payload, activity.kind);
       const command = extractToolCommand(payload);
-      const changedFiles = extractChangedFiles(payload);
+      const changedFiles = extractChangedFiles(payload, itemType);
       const entry: WorkLogEntry = {
         id: activity.id,
         createdAt: activity.createdAt,
@@ -427,6 +438,10 @@ export function deriveWorkLogEntries(
         activityKind: activity.kind,
         tone: activity.tone === "approval" ? "info" : activity.tone,
       };
+      if (toolCall) {
+        entry.toolCall = toolCall;
+        entry.label = toolCall.name;
+      }
 
       const payloadTaskId =
         payload && typeof payload.taskId === "string" && payload.taskId.length > 0
@@ -464,7 +479,7 @@ export function deriveWorkLogEntries(
         });
         entry.tone =
           activity.kind === "task.completed" && payload?.status === "failed" ? "error" : "thinking";
-        if (detail) {
+        if (detail && !isRedundantToolDetail(detail, toolCall, command)) {
           entry.detail = detail;
         }
         if (command) {
@@ -490,7 +505,7 @@ export function deriveWorkLogEntries(
         return entry;
       }
 
-      if (detail) {
+      if (detail && !isRedundantToolDetail(detail, toolCall, command)) {
         entry.detail = detail;
       }
       if (command) {
@@ -551,16 +566,188 @@ function normalizeCommandValue(value: unknown): string | null {
   return parts.length > 0 ? parts.join(" ") : null;
 }
 
+function truncateInline(value: string, maxLength = 72): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(1, maxLength - 1)).trimEnd()}…`;
+}
+
+function humanizeInlineLabel(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function formatToolInputLabel(key: string): string {
+  switch (key) {
+    case "file_path":
+    case "filePath":
+    case "notebook_path":
+    case "notebookPath":
+      return "path";
+    case "old_string":
+    case "oldString":
+      return "find";
+    case "new_string":
+    case "newString":
+      return "replace";
+    case "max_results":
+    case "maxResults":
+      return "limit";
+    default:
+      return humanizeInlineLabel(key).toLowerCase();
+  }
+}
+
+function summarizeToolInputValue(key: string, value: unknown): string | null {
+  const text = asTrimmedString(value);
+  if (text) {
+    if (
+      key === "content" ||
+      key === "new_string" ||
+      key === "newString" ||
+      key === "old_string" ||
+      key === "oldString" ||
+      key === "prompt"
+    ) {
+      return `${text.length} chars`;
+    }
+    return truncateInline(text);
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    const scalarValues = value
+      .map((entry) => summarizeToolInputValue(key, entry))
+      .filter((entry): entry is string => entry !== null);
+    if (scalarValues.length === 0) {
+      return null;
+    }
+    const visibleValues = scalarValues.slice(0, 3);
+    const joined = visibleValues.join(", ");
+    return scalarValues.length > visibleValues.length
+      ? `${truncateInline(joined, 56)} +${scalarValues.length - visibleValues.length}`
+      : truncateInline(joined, 56);
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const nestedPath =
+    asTrimmedString(record.path) ??
+    asTrimmedString(record.filePath) ??
+    asTrimmedString(record.file_path) ??
+    asTrimmedString(record.relativePath);
+  if (nestedPath) {
+    return truncateInline(nestedPath);
+  }
+  const keys = Object.keys(record);
+  if (keys.length === 0) {
+    return null;
+  }
+  const summary = keys.slice(0, 3).map(formatToolInputLabel).join(", ");
+  return keys.length > 3 ? `${summary} +${keys.length - 3}` : summary;
+}
+
+function toolStatusFromActivityKind(
+  activityKind: string,
+): "started" | "updated" | "completed" | null {
+  if (activityKind === "tool.started") return "started";
+  if (activityKind === "tool.updated") return "updated";
+  if (activityKind === "tool.completed") return "completed";
+  return null;
+}
+
+function extractToolCall(
+  payload: Record<string, unknown> | null,
+  activityKind: string,
+): WorkLogEntry["toolCall"] | undefined {
+  const status = toolStatusFromActivityKind(activityKind);
+  if (!status) {
+    return undefined;
+  }
+
+  const data = asRecord(payload?.data);
+  const toolName = asTrimmedString(data?.toolName);
+  if (!toolName) {
+    return undefined;
+  }
+
+  const input = asRecord(data?.input);
+  const inputSummary =
+    input === null
+      ? []
+      : Object.entries(input)
+          .filter(([key]) => key !== "command" && key !== "cmd")
+          .map(([key, value]) => {
+            const summarizedValue = summarizeToolInputValue(key, value);
+            if (!summarizedValue) {
+              return null;
+            }
+            return {
+              label: formatToolInputLabel(key),
+              value: summarizedValue,
+            };
+          })
+          .filter(
+            (
+              entry,
+            ): entry is {
+              label: string;
+              value: string;
+            } => entry !== null,
+          )
+          .slice(0, 4);
+
+  return {
+    name: toolName,
+    status,
+    ...(inputSummary.length > 0 ? { inputSummary } : {}),
+  };
+}
+
+function isRedundantToolDetail(
+  detail: string,
+  toolCall: WorkLogEntry["toolCall"] | undefined,
+  command: string | null,
+): boolean {
+  if (!toolCall) {
+    return false;
+  }
+  const normalized = detail.trim();
+  if (normalized.length === 0) {
+    return true;
+  }
+  if (normalized === toolCall.name || normalized === `${toolCall.name}: {}`) {
+    return true;
+  }
+  if (command && normalized === `${toolCall.name}: ${command}`) {
+    return true;
+  }
+  return normalized.startsWith(`${toolCall.name}:`) && (toolCall.inputSummary?.length ?? 0) > 0;
+}
+
 function extractToolCommand(payload: Record<string, unknown> | null): string | null {
   const data = asRecord(payload?.data);
   const item = asRecord(data?.item);
   const itemResult = asRecord(item?.result);
   const itemInput = asRecord(item?.input);
+  const dataInput = asRecord(data?.input);
   const candidates = [
     normalizeCommandValue(item?.command),
     normalizeCommandValue(itemInput?.command),
     normalizeCommandValue(itemResult?.command),
+    normalizeCommandValue(dataInput?.command),
+    normalizeCommandValue(dataInput?.cmd),
     normalizeCommandValue(data?.command),
+    normalizeCommandValue(data?.cmd),
   ];
   return candidates.find((candidate) => candidate !== null) ?? null;
 }
@@ -574,13 +761,19 @@ function pushChangedFile(target: string[], seen: Set<string>, value: unknown) {
   target.push(normalized);
 }
 
-function collectChangedFiles(value: unknown, target: string[], seen: Set<string>, depth: number) {
+function collectChangedFiles(
+  value: unknown,
+  target: string[],
+  seen: Set<string>,
+  depth: number,
+  includeDirectPaths: boolean,
+) {
   if (depth > 4 || target.length >= 12) {
     return;
   }
   if (Array.isArray(value)) {
     for (const entry of value) {
-      collectChangedFiles(entry, target, seen, depth + 1);
+      collectChangedFiles(entry, target, seen, depth + 1, includeDirectPaths);
       if (target.length >= 12) {
         return;
       }
@@ -593,39 +786,42 @@ function collectChangedFiles(value: unknown, target: string[], seen: Set<string>
     return;
   }
 
-  pushChangedFile(target, seen, record.path);
-  pushChangedFile(target, seen, record.filePath);
-  pushChangedFile(target, seen, record.relativePath);
-  pushChangedFile(target, seen, record.filename);
-  pushChangedFile(target, seen, record.newPath);
-  pushChangedFile(target, seen, record.oldPath);
+  if (includeDirectPaths) {
+    pushChangedFile(target, seen, record.path);
+    pushChangedFile(target, seen, record.filePath);
+    pushChangedFile(target, seen, record.file_path);
+    pushChangedFile(target, seen, record.relativePath);
+    pushChangedFile(target, seen, record.relative_path);
+    pushChangedFile(target, seen, record.filename);
+    pushChangedFile(target, seen, record.newPath);
+    pushChangedFile(target, seen, record.new_path);
+    pushChangedFile(target, seen, record.oldPath);
+    pushChangedFile(target, seen, record.old_path);
+  }
 
   for (const nestedKey of [
-    "item",
-    "result",
-    "input",
-    "data",
     "changes",
     "files",
     "edits",
     "patch",
     "patches",
     "operations",
+    ...(includeDirectPaths ? ["item", "result", "input", "data"] : []),
   ]) {
     if (!(nestedKey in record)) {
       continue;
     }
-    collectChangedFiles(record[nestedKey], target, seen, depth + 1);
+    collectChangedFiles(record[nestedKey], target, seen, depth + 1, includeDirectPaths);
     if (target.length >= 12) {
       return;
     }
   }
 }
 
-function extractChangedFiles(payload: Record<string, unknown> | null): string[] {
+function extractChangedFiles(payload: Record<string, unknown> | null, itemType?: string): string[] {
   const data = asRecord(payload?.data);
   const changedFiles: string[] = [];
-  collectChangedFiles(data, changedFiles, new Set<string>(), 0);
+  collectChangedFiles(data, changedFiles, new Set<string>(), 0, itemType === "file_change");
   return changedFiles;
 }
 

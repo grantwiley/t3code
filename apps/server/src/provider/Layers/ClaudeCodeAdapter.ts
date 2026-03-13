@@ -88,6 +88,7 @@ interface ToolInFlight {
   readonly toolName: string;
   readonly title: string;
   readonly detail?: string;
+  readonly input: Record<string, unknown>;
 }
 
 interface ClaudeSessionContext {
@@ -846,6 +847,7 @@ function makeClaudeCodeAdapter(options?: ClaudeCodeAdapterLiveOptions) {
             toolName,
             title: titleForTool(itemType),
             detail,
+            input: toolInput,
           };
           context.inFlightTools.set(index, tool);
 
@@ -865,7 +867,7 @@ function makeClaudeCodeAdapter(options?: ClaudeCodeAdapterLiveOptions) {
               ...(tool.detail ? { detail: tool.detail } : {}),
               data: {
                 toolName: tool.toolName,
-                input: toolInput,
+                input: tool.input,
               },
             },
             providerRefs: {
@@ -904,6 +906,10 @@ function makeClaudeCodeAdapter(options?: ClaudeCodeAdapterLiveOptions) {
               status: "completed",
               title: tool.title,
               ...(tool.detail ? { detail: tool.detail } : {}),
+              data: {
+                toolName: tool.toolName,
+                input: tool.input,
+              },
             },
             providerRefs: {
               ...providerThreadRef(context),

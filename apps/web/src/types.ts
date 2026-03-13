@@ -89,6 +89,7 @@ export interface Thread {
   projectId: ProjectId;
   title: string;
   model: string;
+  preferredProvider?: ProviderKind | null;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   session: ThreadSession | null;

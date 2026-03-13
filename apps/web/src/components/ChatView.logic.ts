@@ -22,6 +22,7 @@ export function buildLocalDraftThread(
     projectId: draftThread.projectId,
     title: "New thread",
     model: fallbackModel,
+    preferredProvider: null,
     runtimeMode: draftThread.runtimeMode,
     interactionMode: draftThread.interactionMode,
     session: null,
@@ -116,15 +117,46 @@ export function cloneComposerImageForRetry(
   }
 }
 
-export function getCustomModelOptionsByProvider(settings: {
-  customCodexModels: readonly string[];
-  customClaudeModels: readonly string[];
-  customCursorModels: readonly string[];
-}): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
+function mergeModelOptions(
+  base: ReadonlyArray<{ slug: string; name: string }>,
+  extra: ReadonlyArray<{ slug: string; name: string }>,
+): ReadonlyArray<{ slug: string; name: string }> {
+  const merged: Array<{ slug: string; name: string }> = [];
+  const seen = new Set<string>();
+
+  for (const option of [...base, ...extra]) {
+    if (seen.has(option.slug)) {
+      continue;
+    }
+    seen.add(option.slug);
+    merged.push(option);
+  }
+
+  return merged;
+}
+
+export function getCustomModelOptionsByProvider(
+  settings: {
+    customCodexModels: readonly string[];
+    customClaudeModels: readonly string[];
+    customCursorModels: readonly string[];
+    customPiModels: readonly string[];
+  },
+  discovered?: {
+    pi?: ReadonlyArray<{ slug: string; name: string }>;
+  },
+): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
+  const discoveredPiModels = discovered?.pi ?? [];
+  const piOptions =
+    discoveredPiModels.length > 0
+      ? mergeModelOptions(discoveredPiModels, getAppModelOptions("pi", settings.customPiModels))
+      : getAppModelOptions("pi", settings.customPiModels);
+
   return {
     codex: getAppModelOptions("codex", settings.customCodexModels),
     claudeCode: getAppModelOptions("claudeCode", settings.customClaudeModels),
     cursor: getAppModelOptions("cursor", settings.customCursorModels),
+    pi: piOptions,
   };
 }
 
@@ -133,6 +165,7 @@ export function getCustomModelSlugsForProvider(
     customCodexModels: readonly string[];
     customClaudeModels: readonly string[];
     customCursorModels: readonly string[];
+    customPiModels: readonly string[];
   },
   provider: ProviderKind,
 ): readonly string[] {
@@ -141,6 +174,8 @@ export function getCustomModelSlugsForProvider(
       return settings.customClaudeModels;
     case "cursor":
       return settings.customCursorModels;
+    case "pi":
+      return settings.customPiModels;
     case "codex":
     default:
       return settings.customCodexModels;

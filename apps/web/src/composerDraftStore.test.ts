@@ -599,6 +599,14 @@ describe("composerDraftStore setProvider", () => {
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.provider).toBe("cursor");
   });
 
+  it("accepts pi as a valid provider selection", () => {
+    const store = useComposerDraftStore.getState();
+
+    store.setProvider(threadId, "pi");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.provider).toBe("pi");
+  });
+
   it("removes empty provider-only draft when provider is reset", () => {
     const store = useComposerDraftStore.getState();
 

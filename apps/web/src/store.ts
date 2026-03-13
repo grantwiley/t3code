@@ -145,7 +145,12 @@ function toLegacySessionStatus(
 }
 
 function toLegacyProvider(providerName: string | null): ProviderKind {
-  if (providerName === "codex" || providerName === "claudeCode" || providerName === "cursor") {
+  if (
+    providerName === "codex" ||
+    providerName === "claudeCode" ||
+    providerName === "cursor" ||
+    providerName === "pi"
+  ) {
     return providerName;
   }
   return "codex";
@@ -164,12 +169,17 @@ const CURSOR_DISTINCT_MODEL_SLUGS = new Set(
 
 function inferProviderForThreadModel(input: {
   readonly model: string;
+  readonly preferredProvider: ProviderKind | null;
   readonly sessionProviderName: string | null;
 }): ProviderKind {
+  if (input.preferredProvider !== null) {
+    return input.preferredProvider;
+  }
   if (
     input.sessionProviderName === "codex" ||
     input.sessionProviderName === "claudeCode" ||
-    input.sessionProviderName === "cursor"
+    input.sessionProviderName === "cursor" ||
+    input.sessionProviderName === "pi"
   ) {
     return input.sessionProviderName;
   }
@@ -256,10 +266,12 @@ export function syncServerReadModel(
         model: resolveModelSlugForProvider(
           inferProviderForThreadModel({
             model: thread.model,
+            preferredProvider: thread.preferredProvider,
             sessionProviderName: thread.session?.providerName ?? null,
           }),
           thread.model,
         ),
+        preferredProvider: thread.preferredProvider,
         runtimeMode: thread.runtimeMode,
         interactionMode: thread.interactionMode,
         session: thread.session

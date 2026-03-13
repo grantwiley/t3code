@@ -25,10 +25,26 @@ export const CursorModelOptions = Schema.Struct({
 });
 export type CursorModelOptions = typeof CursorModelOptions.Type;
 
+export const PI_THINKING_LEVEL_OPTIONS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+export type PiThinkingLevel = (typeof PI_THINKING_LEVEL_OPTIONS)[number];
+
+export const PiModelOptions = Schema.Struct({
+  thinkingLevel: Schema.optional(Schema.Literals(PI_THINKING_LEVEL_OPTIONS)),
+});
+export type PiModelOptions = typeof PiModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeCode: Schema.optional(ClaudeCodeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
+  pi: Schema.optional(PiModelOptions),
 });
 export type ProviderModelOptions = typeof ProviderModelOptions.Type;
 
@@ -90,6 +106,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "sonnet-4.6-thinking", name: "Claude 4.6 Sonnet (Thinking)" },
     { slug: "gemini-3.1-pro", name: "Gemini 3.1 Pro" },
   ],
+  pi: [{ slug: "gpt-5.4", name: "GPT-5.4" }],
 } as const satisfies Record<ProviderKind, readonly ModelOption[]>;
 
 type BuiltInModelSlug = (typeof MODEL_OPTIONS_BY_PROVIDER)[ProviderKind][number]["slug"];
@@ -100,6 +117,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderKind, ModelSlug> = {
   codex: "gpt-5.3-codex",
   claudeCode: "claude-sonnet-4-6",
   cursor: "opus-4.6-thinking",
+  pi: "gpt-5.4",
 };
 
 // Backward compatibility for existing Codex-only call sites.
@@ -142,16 +160,19 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "opus-4.6-thinking": "opus-4.6-thinking",
     "opus-4.5-thinking": "opus-4.5-thinking",
   },
+  pi: {},
 };
 
 export const REASONING_EFFORT_OPTIONS_BY_PROVIDER = {
   codex: CODEX_REASONING_EFFORT_OPTIONS,
   claudeCode: [],
   cursor: [],
+  pi: [],
 } as const satisfies Record<ProviderKind, readonly CodexReasoningEffort[]>;
 
 export const DEFAULT_REASONING_EFFORT_BY_PROVIDER = {
   codex: "high",
   claudeCode: null,
   cursor: null,
+  pi: null,
 } as const satisfies Record<ProviderKind, CodexReasoningEffort | null>;

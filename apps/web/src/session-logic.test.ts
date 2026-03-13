@@ -489,6 +489,54 @@ describe("deriveWorkLogEntries", () => {
       },
     ]);
   });
+
+  it("extracts Claude tool metadata into structured work rows", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "claude-write",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Write complete",
+        tone: "tool",
+        payload: {
+          itemType: "file_change",
+          detail: 'Write: {"file_path":"apps/web/src/session-logic.ts","content":"hello world"}',
+          data: {
+            toolName: "Write",
+            input: {
+              file_path: "apps/web/src/session-logic.ts",
+              content: "hello world",
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toEqual([
+      {
+        id: "claude-write",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        label: "Write",
+        tone: "tool",
+        activityKind: "tool.completed",
+        toolCall: {
+          name: "Write",
+          status: "completed",
+          inputSummary: [
+            {
+              label: "path",
+              value: "apps/web/src/session-logic.ts",
+            },
+            {
+              label: "content",
+              value: "11 chars",
+            },
+          ],
+        },
+        changedFiles: ["apps/web/src/session-logic.ts"],
+      },
+    ]);
+  });
 });
 
 describe("deriveTimelineEntries", () => {
@@ -603,17 +651,24 @@ describe("isLatestTurnSettled", () => {
 });
 
 describe("PROVIDER_OPTIONS", () => {
-  it("advertises Claude Code on the Claude stack while keeping Cursor as a placeholder", () => {
+  it("advertises Pi alongside the live providers while keeping Cursor as a placeholder", () => {
     const claude = PROVIDER_OPTIONS.find((option) => option.value === "claudeCode");
+    const pi = PROVIDER_OPTIONS.find((option) => option.value === "pi");
     const cursor = PROVIDER_OPTIONS.find((option) => option.value === "cursor");
     expect(PROVIDER_OPTIONS).toEqual([
       { value: "codex", label: "Codex", available: true },
       { value: "claudeCode", label: "Claude Code", available: true },
+      { value: "pi", label: "Pi", available: true },
       { value: "cursor", label: "Cursor", available: false },
     ]);
     expect(claude).toEqual({
       value: "claudeCode",
       label: "Claude Code",
+      available: true,
+    });
+    expect(pi).toEqual({
+      value: "pi",
+      label: "Pi",
       available: true,
     });
     expect(cursor).toEqual({

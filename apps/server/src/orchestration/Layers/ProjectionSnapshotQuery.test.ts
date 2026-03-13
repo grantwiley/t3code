@@ -234,6 +234,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           projectId: asProjectId("project-1"),
           title: "Thread 1",
           model: "gpt-5-codex",
+          preferredProvider: null,
           interactionMode: "default",
           runtimeMode: "full-access",
           branch: null,

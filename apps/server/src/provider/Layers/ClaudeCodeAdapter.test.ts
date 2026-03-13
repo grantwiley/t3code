@@ -5,7 +5,7 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
-import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
+import { ApprovalRequestId, RuntimeItemId, ThreadId } from "@t3tools/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import { Effect, Fiber, Random, Stream } from "effect";
 
@@ -358,6 +358,25 @@ describe("ClaudeCodeAdapterLive", () => {
       assert.equal(toolStarted?.type, "item.started");
       if (toolStarted?.type === "item.started") {
         assert.equal(toolStarted.payload.itemType, "command_execution");
+        assert.deepEqual(toolStarted.payload.data, {
+          toolName: "Bash",
+          input: {
+            command: "ls",
+          },
+        });
+      }
+
+      const toolCompleted = runtimeEvents.find(
+        (event) => event.type === "item.completed" && event.itemId === RuntimeItemId.makeUnsafe("tool-1"),
+      );
+      assert.equal(toolCompleted?.type, "item.completed");
+      if (toolCompleted?.type === "item.completed") {
+        assert.deepEqual(toolCompleted.payload.data, {
+          toolName: "Bash",
+          input: {
+            command: "ls",
+          },
+        });
       }
 
       const turnCompleted = runtimeEvents[runtimeEvents.length - 1];

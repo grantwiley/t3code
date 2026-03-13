@@ -25,6 +25,8 @@ const RuntimeEventRawSource = Schema.Literals([
   "cursor.acp.notification",
   "cursor.acp.request",
   "cursor.acp.response",
+  "pi.rpc.event",
+  "pi.rpc.response",
 ]);
 export type RuntimeEventRawSource = typeof RuntimeEventRawSource.Type;
 

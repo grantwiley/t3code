@@ -7,6 +7,7 @@ import {
   type OrchestrationReadModel,
   type ProjectId,
   type ServerConfig,
+  type TerminalEvent,
   type ThreadId,
   type WsWelcomePayload,
   WS_CHANNELS,
@@ -50,6 +51,8 @@ interface TestFixture {
 let fixture: TestFixture;
 const wsRequests: WsRequestEnvelope["body"][] = [];
 const wsLink = ws.link(/ws(s)?:\/\/.*/);
+const wsClients = new Set<{ send: (message: string) => void }>();
+let wsPushSequence = 2;
 
 interface ViewportSpec {
   name: string;
@@ -210,6 +213,7 @@ function createSnapshotForTargetUser(options: {
         projectId: PROJECT_ID,
         title: "Browser test thread",
         model: "gpt-5",
+        preferredProvider: "codex",
         interactionMode: "default",
         runtimeMode: "full-access",
         branch: "main",
@@ -264,6 +268,7 @@ function addThreadToSnapshot(
         projectId: PROJECT_ID,
         title: "New thread",
         model: "gpt-5",
+        preferredProvider: "codex",
         interactionMode: "default",
         runtimeMode: "full-access",
         branch: "main",
@@ -417,6 +422,7 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
 
 const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
+    wsClients.add(client);
     client.send(
       JSON.stringify({
         type: "push",
@@ -444,6 +450,9 @@ const worker = setupWorker(
         }),
       );
     });
+    client.addEventListener("close", () => {
+      wsClients.delete(client);
+    });
   }),
   http.get("*/attachments/:attachmentId", () =>
     HttpResponse.text(ATTACHMENT_SVG, {
@@ -454,6 +463,19 @@ const worker = setupWorker(
   ),
   http.get("*/api/project-favicon", () => new HttpResponse(null, { status: 204 })),
 );
+
+function pushWsMessage(channel: string, data: unknown): void {
+  const message = JSON.stringify({
+    type: "push",
+    sequence: wsPushSequence,
+    channel,
+    data,
+  });
+  wsPushSequence += 1;
+  for (const client of wsClients) {
+    client.send(message);
+  }
+}
 
 async function nextFrame(): Promise<void> {
   await new Promise<void>((resolve) => {
@@ -528,6 +550,13 @@ async function waitForComposerEditor(): Promise<HTMLElement> {
   return waitForElement(
     () => document.querySelector<HTMLElement>('[contenteditable="true"]'),
     "Unable to find composer editor.",
+  );
+}
+
+async function waitForTerminalDrawer(): Promise<HTMLElement> {
+  return waitForElement(
+    () => document.querySelector<HTMLElement>(".thread-terminal-drawer"),
+    "Unable to find terminal drawer.",
   );
 }
 
@@ -716,6 +745,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
     localStorage.clear();
     document.body.innerHTML = "";
     wsRequests.length = 0;
+    wsClients.clear();
+    wsPushSequence = 2;
     useComposerDraftStore.setState({
       draftsByThreadId: {},
       draftThreadsByThreadId: {},
@@ -1136,6 +1167,64 @@ describe("ChatView timeline estimator parity (full app)", () => {
         (path) => UUID_ROUTE_RE.test(path),
         "Route should have changed to a new draft thread UUID from the shortcut.",
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the terminal drawer open after Cmd+J when the shell exits immediately", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-terminal-shortcut-test" as MessageId,
+        targetText: "terminal shortcut test",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "terminal.toggle",
+              shortcut: {
+                key: "j",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: false,
+                modKey: true,
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      const useMetaForMod = isMacPlatform(navigator.platform);
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "j",
+          metaKey: useMetaForMod,
+          ctrlKey: !useMetaForMod,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      await waitForTerminalDrawer();
+
+      const exitedEvent: TerminalEvent = {
+        type: "exited",
+        threadId: THREAD_ID,
+        terminalId: "default",
+        createdAt: NOW_ISO,
+        exitCode: 1,
+        exitSignal: null,
+      };
+      pushWsMessage(WS_CHANNELS.terminalEvent, exitedEvent);
+      await waitForLayout();
+
+      expect(document.querySelector(".thread-terminal-drawer")).toBeTruthy();
     } finally {
       await mounted.cleanup();
     }

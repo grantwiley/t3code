@@ -140,6 +140,19 @@ const buildCmd = Command.make(
         })`bun tsdown`,
       );
 
+      const piApprovalBridgeSource = path.join(
+        serverDir,
+        "src/provider/pi/t3-approval-bridge.mjs",
+      );
+      const piApprovalBridgeTarget = path.join(serverDir, "dist/pi-approval-bridge.mjs");
+      if (!(yield* fs.exists(piApprovalBridgeSource))) {
+        return yield* new CliError({
+          message: `Missing Pi approval bridge source: ${piApprovalBridgeSource}`,
+        });
+      }
+      yield* fs.copyFile(piApprovalBridgeSource, piApprovalBridgeTarget);
+      yield* Effect.log("[cli] Bundled Pi approval bridge into dist/pi-approval-bridge.mjs");
+
       const webDist = path.join(repoRoot, "apps/web/dist");
       const clientTarget = path.join(serverDir, "dist/client");
 
@@ -177,7 +190,7 @@ const publishCmd = Command.make(
       const backupPath = `${packageJsonPath}.bak`;
 
       // Assert build assets exist
-      for (const relPath of ["dist/index.mjs", "dist/client/index.html"]) {
+      for (const relPath of ["dist/index.mjs", "dist/pi-approval-bridge.mjs", "dist/client/index.html"]) {
         const abs = path.join(serverDir, relPath);
         if (!(yield* fs.exists(abs))) {
           return yield* new CliError({

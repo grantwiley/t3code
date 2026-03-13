@@ -60,6 +60,13 @@ const MODEL_PROVIDER_SETTINGS: Array<{
     placeholder: "your-claude-model-slug",
     example: "claude-sonnet-5-0",
   },
+  {
+    provider: "pi",
+    title: "Pi",
+    description: "Save additional Pi model slugs for the picker and `/model` command.",
+    placeholder: "your-pi-model-slug",
+    example: "anthropic/claude-sonnet-4-6",
+  },
 ] as const;
 
 const TIMESTAMP_FORMAT_LABELS = {
@@ -77,6 +84,8 @@ function getCustomModelsForProvider(
       return settings.customClaudeModels;
     case "cursor":
       return settings.customCursorModels;
+    case "pi":
+      return settings.customPiModels;
     case "codex":
     default:
       return settings.customCodexModels;
@@ -92,6 +101,8 @@ function getDefaultCustomModelsForProvider(
       return defaults.customClaudeModels;
     case "cursor":
       return defaults.customCursorModels;
+    case "pi":
+      return defaults.customPiModels;
     case "codex":
     default:
       return defaults.customCodexModels;
@@ -104,6 +115,8 @@ function patchCustomModels(provider: ProviderKind, models: string[]) {
       return { customClaudeModels: models };
     case "cursor":
       return { customCursorModels: models };
+    case "pi":
+      return { customPiModels: models };
     case "codex":
     default:
       return { customCodexModels: models };
@@ -122,6 +135,7 @@ function SettingsRouteView() {
     codex: "",
     claudeCode: "",
     cursor: "",
+    pi: "",
   });
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
@@ -129,6 +143,7 @@ function SettingsRouteView() {
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
+  const piBinaryPath = settings.piBinaryPath;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = serverConfigQuery.data?.availableEditors;
 
@@ -373,6 +388,49 @@ function SettingsRouteView() {
                     }
                   >
                     Reset codex overrides
+                  </Button>
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Pi RPC</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  These overrides apply to new Pi sessions and let you use a non-default Pi
+                  install.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <label htmlFor="pi-binary-path" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Pi binary path</span>
+                  <Input
+                    id="pi-binary-path"
+                    value={piBinaryPath}
+                    onChange={(event) => updateSettings({ piBinaryPath: event.target.value })}
+                    placeholder="pi"
+                    spellCheck={false}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Leave blank to use <code>pi</code> from your PATH.
+                  </span>
+                </label>
+
+                <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+                  <p>
+                    Binary source: <span className="font-medium text-foreground">{piBinaryPath || "PATH"}</span>
+                  </p>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      updateSettings({
+                        piBinaryPath: defaults.piBinaryPath,
+                      })
+                    }
+                  >
+                    Reset pi overrides
                   </Button>
                 </div>
               </div>
