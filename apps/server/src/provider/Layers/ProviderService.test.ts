@@ -738,7 +738,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
         threadId: session.threadId,
         turnId: asTurnId("turn-1"),
         toolKind: "command",
-        title: "Command run",
+        title: "Ran command",
       });
       fanout.codex.emit({
         type: "tool.completed",
@@ -748,7 +748,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
         threadId: session.threadId,
         turnId: asTurnId("turn-1"),
         toolKind: "command",
-        title: "Command run",
+        title: "Ran command",
       });
       fanout.codex.emit({
         type: "turn.completed",
@@ -803,7 +803,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
           threadId: session.threadId,
           turnId: asTurnId("turn-1"),
           toolKind: "command",
-          title: "Command run",
+          title: "Ran command",
           detail: "echo one",
         },
         {

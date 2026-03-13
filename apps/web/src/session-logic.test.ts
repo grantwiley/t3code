@@ -370,7 +370,7 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({
         id: "tool-complete",
         createdAt: "2026-02-23T00:00:02.000Z",
-        summary: "Command run complete",
+        summary: "Ran command",
         tone: "tool",
         kind: "tool.completed",
       }),
@@ -490,6 +490,39 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("keeps compact Codex tool metadata used for icons and labels", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "tool-with-metadata",
+        kind: "tool.completed",
+        summary: "bash",
+        payload: {
+          itemType: "command_execution",
+          title: "bash",
+          status: "completed",
+          detail: '{ "dev": "vite dev --port 3000" } <exited with exit code 0>',
+          data: {
+            item: {
+              command: ["bun", "run", "dev"],
+              result: {
+                content: '{ "dev": "vite dev --port 3000" } <exited with exit code 0>',
+                exitCode: 0,
+              },
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry).toMatchObject({
+      command: "bun run dev",
+      detail: '{ "dev": "vite dev --port 3000" }',
+      itemType: "command_execution",
+      toolTitle: "bash",
+    });
+  });
+
   it("extracts Claude tool metadata into structured work rows", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -519,6 +552,7 @@ describe("deriveWorkLogEntries", () => {
         label: "Write",
         tone: "tool",
         activityKind: "tool.completed",
+        itemType: "file_change",
         toolCall: {
           name: "Write",
           status: "completed",
@@ -535,6 +569,34 @@ describe("deriveWorkLogEntries", () => {
         },
         changedFiles: ["apps/web/src/session-logic.ts"],
       },
+    ]);
+  });
+
+  it("extracts changed file paths for file-change tool activities", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "file-tool",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "File change",
+        payload: {
+          itemType: "file_change",
+          data: {
+            item: {
+              changes: [
+                { path: "apps/web/src/components/ChatView.tsx" },
+                { filename: "apps/web/src/session-logic.ts" },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.changedFiles).toEqual([
+      "apps/web/src/components/ChatView.tsx",
+      "apps/web/src/session-logic.ts",
     ]);
   });
 });
