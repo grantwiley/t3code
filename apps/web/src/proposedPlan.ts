@@ -19,6 +19,48 @@ export function stripDisplayedPlanMarkdown(planMarkdown: string): string {
   return sourceLines.join("\n");
 }
 
+export function buildCollapsedProposedPlanPreviewMarkdown(
+  planMarkdown: string,
+  options?: {
+    maxLines?: number;
+  },
+): string {
+  const maxLines = options?.maxLines ?? 8;
+  const lines = stripDisplayedPlanMarkdown(planMarkdown)
+    .trimEnd()
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd());
+  const previewLines: string[] = [];
+  let visibleLineCount = 0;
+  let hasMoreContent = false;
+
+  for (const line of lines) {
+    const isVisibleLine = line.trim().length > 0;
+    if (isVisibleLine && visibleLineCount >= maxLines) {
+      hasMoreContent = true;
+      break;
+    }
+    previewLines.push(line);
+    if (isVisibleLine) {
+      visibleLineCount += 1;
+    }
+  }
+
+  while (previewLines.length > 0 && previewLines.at(-1)?.trim().length === 0) {
+    previewLines.pop();
+  }
+
+  if (previewLines.length === 0) {
+    return proposedPlanTitle(planMarkdown) ?? "Plan preview unavailable.";
+  }
+
+  if (hasMoreContent) {
+    previewLines.push("", "...");
+  }
+
+  return previewLines.join("\n");
+}
+
 function sanitizePlanFileSegment(input: string): string {
   const sanitized = input
     .toLowerCase()
@@ -30,6 +72,24 @@ function sanitizePlanFileSegment(input: string): string {
 
 export function buildPlanImplementationPrompt(planMarkdown: string): string {
   return `PLEASE IMPLEMENT THIS PLAN:\n${planMarkdown.trim()}`;
+}
+
+export function resolvePlanFollowUpSubmission(input: { draftText: string; planMarkdown: string }): {
+  text: string;
+  interactionMode: "default" | "plan";
+} {
+  const trimmedDraftText = input.draftText.trim();
+  if (trimmedDraftText.length > 0) {
+    return {
+      text: trimmedDraftText,
+      interactionMode: "plan",
+    };
+  }
+
+  return {
+    text: buildPlanImplementationPrompt(input.planMarkdown),
+    interactionMode: "default",
+  };
 }
 
 export function buildPlanImplementationThreadTitle(planMarkdown: string): string {

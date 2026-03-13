@@ -382,6 +382,22 @@ export function setProjectExpanded(
   return changed ? { ...state, projects } : state;
 }
 
+export function reorderProjects(
+  state: AppState,
+  draggedProjectId: Project["id"],
+  targetProjectId: Project["id"],
+): AppState {
+  if (draggedProjectId === targetProjectId) return state;
+  const draggedIndex = state.projects.findIndex((project) => project.id === draggedProjectId);
+  const targetIndex = state.projects.findIndex((project) => project.id === targetProjectId);
+  if (draggedIndex < 0 || targetIndex < 0) return state;
+  const projects = [...state.projects];
+  const [draggedProject] = projects.splice(draggedIndex, 1);
+  if (!draggedProject) return state;
+  projects.splice(targetIndex, 0, draggedProject);
+  return { ...state, projects };
+}
+
 export function setError(state: AppState, threadId: ThreadId, error: string | null): AppState {
   const threads = updateThread(state.threads, threadId, (t) => {
     if (t.error === error) return t;
@@ -417,6 +433,7 @@ interface AppStore extends AppState {
   markThreadUnread: (threadId: ThreadId) => void;
   toggleProject: (projectId: Project["id"]) => void;
   setProjectExpanded: (projectId: Project["id"], expanded: boolean) => void;
+  reorderProjects: (draggedProjectId: Project["id"], targetProjectId: Project["id"]) => void;
   setError: (threadId: ThreadId, error: string | null) => void;
   setThreadBranch: (
     threadId: ThreadId,
@@ -437,6 +454,8 @@ export const useStore = create<AppStore>((set) => ({
     set((state) => toggleProject(state, projectId)),
   setProjectExpanded: (projectId, expanded) =>
     set((state) => setProjectExpanded(state, projectId, expanded)),
+  reorderProjects: (draggedProjectId, targetProjectId) =>
+    set((state) => reorderProjects(state, draggedProjectId, targetProjectId)),
   setError: (threadId, error) =>
     set((state) => setError(state, threadId, error)),
   setThreadBranch: (threadId, branch, worktreePath) =>

@@ -17,6 +17,7 @@ import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effe
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ServerConfig } from "../../config.ts";
+import { CheckpointStore, type CheckpointStoreShape } from "../../checkpointing/Services/CheckpointStore.ts";
 import { TextGenerationError } from "../../git/Errors.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
@@ -175,8 +176,34 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
     );
-
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
+    const checkpointRefsByCwd = new Map<string, Set<string>>();
+    const getCheckpointRefs = (cwd: string) => {
+      let refs = checkpointRefsByCwd.get(cwd);
+      if (!refs) {
+        refs = new Set<string>();
+        checkpointRefsByCwd.set(cwd, refs);
+      }
+      return refs;
+    };
+    const hasCheckpointRef = vi.fn<
+      CheckpointStoreShape["hasCheckpointRef"]
+    >(({ cwd, checkpointRef }) => Effect.succeed(getCheckpointRefs(cwd).has(checkpointRef)));
+    const captureCheckpoint = vi.fn<
+      CheckpointStoreShape["captureCheckpoint"]
+    >(({ cwd, checkpointRef }) =>
+      Effect.sync(() => {
+        getCheckpointRefs(cwd).add(checkpointRef);
+      }),
+    );
+    const checkpointStore: CheckpointStoreShape = {
+      isGitRepository: () => unsupported(),
+      captureCheckpoint,
+      hasCheckpointRef,
+      restoreCheckpoint: () => unsupported(),
+      diffCheckpoints: () => unsupported(),
+      deleteCheckpointRefs: () => unsupported(),
+    };
     const service: ProviderServiceShape = {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
@@ -202,6 +229,7 @@ describe("ProviderCommandReactor", () => {
     );
     const layer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(orchestrationLayer),
+      Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
       Layer.provideMerge(Layer.succeed(GitCore, { renameBranch } as unknown as GitCoreShape)),
       Layer.provideMerge(
@@ -255,6 +283,8 @@ describe("ProviderCommandReactor", () => {
       stopSession,
       renameBranch,
       generateBranchName,
+      captureCheckpoint,
+      hasCheckpointRef,
       stateDir,
     };
   }
@@ -293,6 +323,38 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("captures a pre-turn checkpoint baseline before sending the provider turn", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-baseline-order"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-baseline-order"),
+          role: "user",
+          text: "capture before send",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.captureCheckpoint.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.captureCheckpoint.mock.calls[0]?.[0]).toMatchObject({
+      cwd: "/tmp/provider-project",
+      checkpointRef: expect.stringContaining("/turn/0"),
+    });
+    expect(harness.captureCheckpoint.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.sendTurn.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
+    );
   });
 
   it("forwards codex model options through session start and turn send", async () => {

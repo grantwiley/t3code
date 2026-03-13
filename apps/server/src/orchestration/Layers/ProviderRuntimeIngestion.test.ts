@@ -1402,7 +1402,7 @@ describe("ProviderRuntimeIngestion", () => {
         : undefined;
 
     expect(started?.kind).toBe("task.started");
-    expect(started?.summary).toBe("Plan task started");
+    expect(started?.summary).toBe("Plan started");
     expect(progress?.kind).toBe("task.progress");
     expect(progressPayload?.detail).toBe(
       "Comparing the desktop rollout chunks to the app-server stream.",

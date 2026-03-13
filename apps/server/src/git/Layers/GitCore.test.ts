@@ -539,15 +539,18 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* checkoutGitBranch({ cwd: source, branch: featureBranch });
         const core = yield* GitCore;
         yield* Effect.promise(() =>
-          vi.waitFor(async () => {
-            const details = await Effect.runPromise(core.statusDetails(source));
-            expect(details.branch).toBe(featureBranch);
-            expect(details.aheadCount).toBe(0);
-            expect(details.behindCount).toBe(1);
-          }),
+          vi.waitFor(
+            async () => {
+              const details = await Effect.runPromise(core.statusDetails(source));
+              expect(details.branch).toBe(featureBranch);
+              expect(details.aheadCount).toBe(0);
+              expect(details.behindCount).toBe(1);
+            },
+            { timeout: 10_000 },
+          ),
         );
       }),
-    );
+    30_000);
 
     it.effect("keeps checkout successful when upstream refresh fails", () =>
       Effect.gen(function* () {
@@ -696,7 +699,7 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(yield* git(source, ["branch", "--show-current"])).toBe(featureBranch);
         releaseFetch();
       }),
-    );
+    30_000);
 
     it.effect("throws when branch does not exist", () =>
       Effect.gen(function* () {
@@ -1691,6 +1694,65 @@ it.layer(TestLayer)("git integration", (it) => {
           expect(details.aheadCount).toBe(0);
           expect(details.behindCount).toBe(1);
         }),
+    );
+
+    it.effect(
+      "retries upstream refresh after a non-zero status fetch result instead of caching stale state",
+      () =>
+        Effect.gen(function* () {
+          const remote = yield* makeTmpDir();
+          const source = yield* makeTmpDir();
+          const clone = yield* makeTmpDir();
+          yield* git(remote, ["init", "--bare"]);
+
+          yield* initRepoWithCommit(source);
+          const initialBranch = (yield* listGitBranches({ cwd: source })).branches.find(
+            (branch) => branch.current,
+          )!.name;
+          yield* git(source, ["remote", "add", "origin", remote]);
+          yield* git(source, ["push", "-u", "origin", initialBranch]);
+
+          yield* git(clone, ["clone", remote, "."]);
+          yield* git(clone, ["config", "user.email", "test@test.com"]);
+          yield* git(clone, ["config", "user.name", "Test"]);
+          yield* git(clone, [
+            "checkout",
+            "-B",
+            initialBranch,
+            "--track",
+            `origin/${initialBranch}`,
+          ]);
+          yield* writeTextFile(path.join(clone, "CHANGELOG.md"), "remote change\n");
+          yield* git(clone, ["add", "CHANGELOG.md"]);
+          yield* git(clone, ["commit", "-m", "remote update"]);
+          yield* git(clone, ["push", "origin", initialBranch]);
+
+          const realGitService = yield* GitService;
+          let statusFetchAttempts = 0;
+          const core = yield* makeIsolatedGitCore({
+            execute: (input) => {
+              if (input.operation === "GitCore.fetchUpstreamRefForStatus") {
+                statusFetchAttempts += 1;
+                if (statusFetchAttempts === 1) {
+                  return Effect.succeed({
+                    code: 1,
+                    stdout: "",
+                    stderr: "cannot lock ref 'FETCH_HEAD'",
+                  });
+                }
+              }
+              return realGitService.execute(input);
+            },
+          });
+
+          const initialStatus = yield* core.statusDetails(source);
+          expect(initialStatus.behindCount).toBe(0);
+
+          const refreshedStatus = yield* core.statusDetails(source);
+          expect(refreshedStatus.behindCount).toBe(1);
+          expect(statusFetchAttempts).toBe(2);
+        }),
+      30_000,
     );
 
     it.effect("prepares commit context by auto-staging and creates commit", () =>

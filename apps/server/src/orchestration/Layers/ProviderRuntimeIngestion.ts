@@ -68,6 +68,20 @@ function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
 
+function humanizeTaskType(taskType: string | undefined): string | undefined {
+  if (!taskType) {
+    return undefined;
+  }
+  if (taskType === "local_agent") {
+    return "Local agent";
+  }
+  return taskType
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
 function normalizeProposedPlanMarkdown(planMarkdown: string | undefined): string | undefined {
   const trimmed = planMarkdown?.trim();
   if (!trimmed) {
@@ -342,6 +356,7 @@ function runtimeEventToActivities(
     }
 
     case "task.started": {
+      const taskTypeLabel = humanizeTaskType(event.payload.taskType);
       return [
         {
           id: event.eventId,
@@ -349,11 +364,7 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "task.started",
           summary:
-            event.payload.taskType === "plan"
-              ? "Plan task started"
-              : event.payload.taskType
-                ? `${event.payload.taskType} task started`
-                : "Task started",
+            taskTypeLabel ? `${taskTypeLabel} started` : "Task started",
           payload: {
             taskId: event.payload.taskId,
             ...(event.payload.taskType ? { taskType: event.payload.taskType } : {}),
@@ -372,7 +383,7 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "task.progress",
-          summary: "Reasoning update",
+          summary: "Task working",
           payload: {
             taskId: event.payload.taskId,
             detail: truncateDetail(event.payload.description),
@@ -386,6 +397,7 @@ function runtimeEventToActivities(
     }
 
     case "task.completed": {
+      const taskTypeLabel = humanizeTaskType(asString(runtimePayloadRecord(event)?.taskType));
       return [
         {
           id: event.eventId,
@@ -394,13 +406,14 @@ function runtimeEventToActivities(
           kind: "task.completed",
           summary:
             event.payload.status === "failed"
-              ? "Task failed"
+              ? `${taskTypeLabel ?? "Task"} failed`
               : event.payload.status === "stopped"
-                ? "Task stopped"
-                : "Task completed",
+                ? `${taskTypeLabel ?? "Task"} stopped`
+                : `${taskTypeLabel ?? "Task"} completed`,
           payload: {
             taskId: event.payload.taskId,
             status: event.payload.status,
+            ...(taskTypeLabel ? { taskType: taskTypeLabel } : {}),
             ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
           },

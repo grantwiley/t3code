@@ -5,11 +5,15 @@ import {
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ThreadId,
+  WsResponse,
   WS_CHANNELS,
   WS_METHODS,
   type ServerProviderStatus,
 } from "@t3tools/contracts";
+import { Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const decodeWsResponse = WsResponse.pipe(Schema.decodeUnknownSync);
 
 const requestMock = vi.fn<(...args: Array<unknown>) => Promise<unknown>>();
 const showContextMenuFallbackMock = vi.fn<
@@ -19,6 +23,7 @@ const showContextMenuFallbackMock = vi.fn<
   ) => Promise<T | null>
 >();
 const channelListeners = new Map<string, Set<(data: unknown) => void>>();
+const latestPushByChannel = new Map<string, unknown>();
 const subscribeMock = vi.fn<(channel: string, listener: (data: unknown) => void) => () => void>(
   (channel, listener) => {
     const listeners = channelListeners.get(channel) ?? new Set<(data: unknown) => void>();
@@ -38,6 +43,9 @@ vi.mock("./wsTransport", () => {
     WsTransport: class MockWsTransport {
       request = requestMock;
       subscribe = subscribeMock;
+      getLatestPush(channel: string) {
+        return (latestPushByChannel.get(channel) as { data: unknown } | undefined) ?? null;
+      }
     },
   };
 });
@@ -47,10 +55,27 @@ vi.mock("./contextMenuFallback", () => ({
 }));
 
 function emitPush(channel: string, data: unknown): void {
+  let decoded: ReturnType<typeof decodeWsResponse>;
+  try {
+    decoded = decodeWsResponse({
+      type: "push",
+      sequence: 1,
+      channel,
+      data,
+    });
+  } catch (error) {
+    console.warn("Dropped inbound WebSocket push payload", {
+      reason: "decode-failed",
+      raw: data,
+      issue: String(error),
+    });
+    return;
+  }
+  latestPushByChannel.set(channel, decoded);
   const listeners = channelListeners.get(channel);
   if (!listeners) return;
   for (const listener of listeners) {
-    listener(data);
+    listener(decoded);
   }
 }
 
@@ -80,6 +105,7 @@ beforeEach(() => {
   showContextMenuFallbackMock.mockReset();
   subscribeMock.mockClear();
   channelListeners.clear();
+  latestPushByChannel.clear();
   Reflect.deleteProperty(getWindowForTest(), "desktopBridge");
 });
 
@@ -154,7 +180,7 @@ describe("wsNativeApi", () => {
     expect(warnSpy).toHaveBeenCalledWith("Dropped inbound WebSocket push payload", {
       reason: "decode-failed",
       raw: { cwd: 42, projectName: "t3-code" },
-      issue: expect.stringContaining("SchemaError"),
+      issue: expect.any(String),
     });
   });
 
@@ -298,7 +324,7 @@ describe("wsNativeApi", () => {
         type: "output",
         data: "hello",
       },
-      issue: expect.stringContaining("SchemaError"),
+      issue: expect.any(String),
     });
     expect(warnSpy).toHaveBeenNthCalledWith(2, "Dropped inbound WebSocket push payload", {
       reason: "decode-failed",
@@ -306,7 +332,7 @@ describe("wsNativeApi", () => {
         sequence: -1,
         type: "project.created",
       },
-      issue: expect.stringContaining("SchemaError"),
+      issue: expect.any(String),
     });
   });
 

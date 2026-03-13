@@ -351,33 +351,40 @@ const makeGitCore = Effect.gen(function* () {
       };
     });
 
-  const fetchUpstreamRef = (
+  const makeStatusUpstreamRefreshCacheKey = (
     cwd: string,
     upstream: { upstreamRef: string; remoteName: string; upstreamBranch: string },
-  ): Effect.Effect<void, GitCommandError> => {
-    const refspec = `+refs/heads/${upstream.upstreamBranch}:refs/remotes/${upstream.upstreamRef}`;
-    return runGit(
-      "GitCore.fetchUpstreamRef",
+  ) =>
+    new StatusUpstreamRefreshCacheKey({
       cwd,
-      ["fetch", "--quiet", "--no-tags", upstream.remoteName, refspec],
-      true,
-    );
-  };
+      upstreamRef: upstream.upstreamRef,
+      remoteName: upstream.remoteName,
+      upstreamBranch: upstream.upstreamBranch,
+    });
 
   const fetchUpstreamRefForStatus = (
     cwd: string,
     upstream: { upstreamRef: string; remoteName: string; upstreamBranch: string },
   ): Effect.Effect<void, GitCommandError> => {
     const refspec = `+refs/heads/${upstream.upstreamBranch}:refs/remotes/${upstream.upstreamRef}`;
-    return executeGit(
-      "GitCore.fetchUpstreamRefForStatus",
-      cwd,
-      ["fetch", "--quiet", "--no-tags", upstream.remoteName, refspec],
-      {
-        allowNonZeroExit: true,
-        timeoutMs: Duration.toMillis(STATUS_UPSTREAM_REFRESH_TIMEOUT),
-      },
-    ).pipe(Effect.asVoid);
+    const args = ["fetch", "--quiet", "--no-tags", upstream.remoteName, refspec] as const;
+    return executeGit("GitCore.fetchUpstreamRefForStatus", cwd, args, {
+      allowNonZeroExit: true,
+      timeoutMs: Duration.toMillis(STATUS_UPSTREAM_REFRESH_TIMEOUT),
+    }).pipe(
+      Effect.flatMap((result) =>
+        result.code === 0
+          ? Effect.void
+          : Effect.fail(
+              createGitCommandError(
+                "GitCore.fetchUpstreamRefForStatus",
+                cwd,
+                args,
+                result.stderr.trim() || `git fetch failed with exit code ${result.code}`,
+              ),
+            ),
+      ),
+    );
   };
 
   const statusUpstreamRefreshCache = yield* Cache.makeWith({
@@ -399,22 +406,16 @@ const makeGitCore = Effect.gen(function* () {
     Effect.gen(function* () {
       const upstream = yield* resolveCurrentUpstream(cwd);
       if (!upstream) return;
-      yield* Cache.get(
-        statusUpstreamRefreshCache,
-        new StatusUpstreamRefreshCacheKey({
-          cwd,
-          upstreamRef: upstream.upstreamRef,
-          remoteName: upstream.remoteName,
-          upstreamBranch: upstream.upstreamBranch,
-        }),
-      );
+      yield* Cache.get(statusUpstreamRefreshCache, makeStatusUpstreamRefreshCacheKey(cwd, upstream));
     });
 
   const refreshCheckedOutBranchUpstream = (cwd: string): Effect.Effect<void, GitCommandError> =>
     Effect.gen(function* () {
       const upstream = yield* resolveCurrentUpstream(cwd);
       if (!upstream) return;
-      yield* fetchUpstreamRef(cwd, upstream);
+      const cacheKey = makeStatusUpstreamRefreshCacheKey(cwd, upstream);
+      yield* Cache.invalidate(statusUpstreamRefreshCache, cacheKey);
+      yield* Cache.get(statusUpstreamRefreshCache, cacheKey);
     });
 
   const resolveDefaultBranchName = (

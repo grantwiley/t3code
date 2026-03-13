@@ -248,14 +248,8 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
-  yield* keybindingsManager.syncDefaultKeybindingsOnStartup.pipe(
-    Effect.catch((error) =>
-      Effect.logWarning("failed to sync keybindings defaults on startup", {
-        path: error.configPath,
-        detail: error.detail,
-        cause: error.cause,
-      }),
-    ),
+  yield* keybindingsManager.start.pipe(
+    Effect.mapError((cause) => new ServerLifecycleError({ operation: "keybindingsStart", cause })),
   );
 
   const providerStatuses = yield* providerHealth.getStatuses;

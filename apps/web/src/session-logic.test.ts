@@ -401,6 +401,94 @@ describe("deriveWorkLogEntries", () => {
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries.map((entry) => entry.id)).toEqual(["first", "second"]);
   });
+
+  it("preserves task metadata across Claude task lifecycle events", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "task-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "task.started",
+        summary: "Local agent started",
+        tone: "info",
+        payload: {
+          taskId: "task-1",
+          taskType: "local_agent",
+          detail: "Explore project structure",
+        },
+      }),
+      makeActivity({
+        id: "task-progress",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "task.progress",
+        summary: "Task working",
+        tone: "info",
+        payload: {
+          taskId: "task-1",
+          detail: "Scanning package boundaries",
+          lastToolName: "Glob",
+        },
+      }),
+      makeActivity({
+        id: "task-complete",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "task.completed",
+        summary: "Local agent completed",
+        tone: "info",
+        payload: {
+          taskId: "task-1",
+          status: "completed",
+          detail: "Mapped the repo structure",
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toEqual([
+      {
+        id: "task-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        label: "Started",
+        detail: "Explore project structure",
+        tone: "thinking",
+        activityKind: "task.started",
+        task: {
+          id: "task-1",
+          phase: "started",
+          type: "local_agent",
+          typeLabel: "Local agent",
+        },
+      },
+      {
+        id: "task-progress",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        label: "Working",
+        detail: "Scanning package boundaries",
+        tone: "thinking",
+        activityKind: "task.progress",
+        task: {
+          id: "task-1",
+          phase: "progress",
+          type: "local_agent",
+          typeLabel: "Local agent",
+          lastToolName: "Glob",
+        },
+      },
+      {
+        id: "task-complete",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        label: "Completed",
+        detail: "Mapped the repo structure",
+        tone: "thinking",
+        activityKind: "task.completed",
+        task: {
+          id: "task-1",
+          phase: "completed",
+          type: "local_agent",
+          typeLabel: "Local agent",
+          status: "completed",
+        },
+      },
+    ]);
+  });
 });
 
 describe("deriveTimelineEntries", () => {
@@ -430,6 +518,7 @@ describe("deriveTimelineEntries", () => {
           createdAt: "2026-02-23T00:00:03.000Z",
           label: "Ran tests",
           tone: "tool",
+          activityKind: "tool.completed",
         },
       ],
     );

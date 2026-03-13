@@ -27,7 +27,18 @@ export interface WorkLogEntry {
   createdAt: string;
   label: string;
   detail?: string;
+  command?: string;
+  changedFiles?: ReadonlyArray<string>;
   tone: "thinking" | "tool" | "info" | "error";
+  activityKind: string;
+  task?: {
+    id: string;
+    phase: "started" | "progress" | "completed";
+    type?: string;
+    typeLabel?: string;
+    status?: "completed" | "failed" | "stopped";
+    lastToolName?: string;
+  };
 }
 
 export interface PendingApproval {
@@ -111,15 +122,29 @@ export function formatElapsed(startIso: string, endIso: string | undefined): str
   return formatDuration(endedAt - startedAt);
 }
 
+type LatestTurnTiming = Pick<OrchestrationLatestTurn, "turnId" | "startedAt" | "completedAt">;
+type SessionActivityState = Pick<ThreadSession, "orchestrationStatus" | "activeTurnId">;
+
 export function isLatestTurnSettled(
-  latestTurn: Pick<OrchestrationLatestTurn, "turnId" | "startedAt" | "completedAt"> | null,
-  session: Pick<ThreadSession, "orchestrationStatus" | "activeTurnId"> | null,
+  latestTurn: LatestTurnTiming | null,
+  session: SessionActivityState | null,
 ): boolean {
   if (!latestTurn?.startedAt) return false;
   if (!latestTurn.completedAt) return false;
   if (!session) return true;
   if (session.orchestrationStatus === "running") return false;
   return true;
+}
+
+export function deriveActiveWorkStartedAt(
+  latestTurn: LatestTurnTiming | null,
+  session: SessionActivityState | null,
+  sendStartedAt: string | null,
+): string | null {
+  if (!isLatestTurnSettled(latestTurn, session)) {
+    return latestTurn?.startedAt ?? sendStartedAt;
+  }
+  return sendStartedAt;
 }
 
 function requestKindFromRequestType(
@@ -391,6 +416,7 @@ export function deriveWorkLogEntries(
   latestTurnId: TurnId | undefined,
 ): WorkLogEntry[] {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const taskTypeById = new Map<string, string>();
   return ordered
     .filter((activity) => (latestTurnId ? activity.turnId === latestTurnId : true))
     .filter((activity) => activity.kind !== "tool.started")
@@ -400,17 +426,261 @@ export function deriveWorkLogEntries(
         activity.payload && typeof activity.payload === "object"
           ? (activity.payload as Record<string, unknown>)
           : null;
+      const command = extractToolCommand(payload);
+      const changedFiles = extractChangedFiles(payload);
       const entry: WorkLogEntry = {
         id: activity.id,
         createdAt: activity.createdAt,
         label: activity.summary,
+        activityKind: activity.kind,
         tone: activity.tone === "approval" ? "info" : activity.tone,
       };
-      if (payload && typeof payload.detail === "string" && payload.detail.length > 0) {
-        entry.detail = payload.detail;
+
+      const payloadTaskId =
+        payload && typeof payload.taskId === "string" && payload.taskId.length > 0
+          ? payload.taskId
+          : undefined;
+      const payloadTaskType =
+        payload && typeof payload.taskType === "string" && payload.taskType.length > 0
+          ? payload.taskType
+          : undefined;
+      if (payloadTaskId && payloadTaskType) {
+        taskTypeById.set(payloadTaskId, payloadTaskType);
+      }
+
+      const rememberedTaskType =
+        payloadTaskType ?? (payloadTaskId ? taskTypeById.get(payloadTaskId) : undefined);
+      const detail = workLogDetailFromPayload(payload);
+      const lastToolName =
+        payload && typeof payload.lastToolName === "string" && payload.lastToolName.length > 0
+          ? payload.lastToolName
+          : undefined;
+
+      if (payloadTaskId && isTaskActivityKind(activity.kind)) {
+        const taskPhase = taskPhaseFromActivityKind(activity.kind);
+        const taskTypeLabel = humanizeTaskType(rememberedTaskType);
+        entry.label = buildTaskLabel({
+          phase: taskPhase,
+          ...(taskTypeLabel ? { taskTypeLabel } : {}),
+          ...((activity.kind === "task.completed" &&
+            payload &&
+            (payload.status === "completed" ||
+              payload.status === "failed" ||
+              payload.status === "stopped")
+              ? { status: payload.status }
+              : {}) as { status?: "completed" | "failed" | "stopped" }),
+        });
+        entry.tone =
+          activity.kind === "task.completed" && payload?.status === "failed" ? "error" : "thinking";
+        if (detail) {
+          entry.detail = detail;
+        }
+        if (command) {
+          entry.command = command;
+        }
+        if (changedFiles.length > 0) {
+          entry.changedFiles = changedFiles;
+        }
+        entry.task = {
+          id: payloadTaskId,
+          phase: taskPhase,
+          ...(rememberedTaskType ? { type: rememberedTaskType } : {}),
+          ...(taskTypeLabel ? { typeLabel: taskTypeLabel } : {}),
+          ...(activity.kind === "task.completed" &&
+          payload &&
+          (payload.status === "completed" ||
+            payload.status === "failed" ||
+            payload.status === "stopped")
+            ? { status: payload.status }
+            : {}),
+          ...(lastToolName ? { lastToolName } : {}),
+        };
+        return entry;
+      }
+
+      if (detail) {
+        entry.detail = detail;
+      }
+      if (command) {
+        entry.command = command;
+      }
+      if (changedFiles.length > 0) {
+        entry.changedFiles = changedFiles;
       }
       return entry;
     });
+}
+
+function workLogDetailFromPayload(
+  payload: Record<string, unknown> | null,
+): string | undefined {
+  if (!payload) {
+    return undefined;
+  }
+  const candidates = [
+    payload.detail,
+    payload.message,
+    payload.summary,
+    payload.output,
+    payload.stdout,
+    payload.stderr,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim().length > 0) {
+      return candidate.trim();
+    }
+  }
+  return undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function asTrimmedString(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function normalizeCommandValue(value: unknown): string | null {
+  const direct = asTrimmedString(value);
+  if (direct) {
+    return direct;
+  }
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const parts = value
+    .map((entry) => asTrimmedString(entry))
+    .filter((entry): entry is string => entry !== null);
+  return parts.length > 0 ? parts.join(" ") : null;
+}
+
+function extractToolCommand(payload: Record<string, unknown> | null): string | null {
+  const data = asRecord(payload?.data);
+  const item = asRecord(data?.item);
+  const itemResult = asRecord(item?.result);
+  const itemInput = asRecord(item?.input);
+  const candidates = [
+    normalizeCommandValue(item?.command),
+    normalizeCommandValue(itemInput?.command),
+    normalizeCommandValue(itemResult?.command),
+    normalizeCommandValue(data?.command),
+  ];
+  return candidates.find((candidate) => candidate !== null) ?? null;
+}
+
+function pushChangedFile(target: string[], seen: Set<string>, value: unknown) {
+  const normalized = asTrimmedString(value);
+  if (!normalized || seen.has(normalized)) {
+    return;
+  }
+  seen.add(normalized);
+  target.push(normalized);
+}
+
+function collectChangedFiles(value: unknown, target: string[], seen: Set<string>, depth: number) {
+  if (depth > 4 || target.length >= 12) {
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectChangedFiles(entry, target, seen, depth + 1);
+      if (target.length >= 12) {
+        return;
+      }
+    }
+    return;
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return;
+  }
+
+  pushChangedFile(target, seen, record.path);
+  pushChangedFile(target, seen, record.filePath);
+  pushChangedFile(target, seen, record.relativePath);
+  pushChangedFile(target, seen, record.filename);
+  pushChangedFile(target, seen, record.newPath);
+  pushChangedFile(target, seen, record.oldPath);
+
+  for (const nestedKey of [
+    "item",
+    "result",
+    "input",
+    "data",
+    "changes",
+    "files",
+    "edits",
+    "patch",
+    "patches",
+    "operations",
+  ]) {
+    if (!(nestedKey in record)) {
+      continue;
+    }
+    collectChangedFiles(record[nestedKey], target, seen, depth + 1);
+    if (target.length >= 12) {
+      return;
+    }
+  }
+}
+
+function extractChangedFiles(payload: Record<string, unknown> | null): string[] {
+  const data = asRecord(payload?.data);
+  const changedFiles: string[] = [];
+  collectChangedFiles(data, changedFiles, new Set<string>(), 0);
+  return changedFiles;
+}
+
+function isTaskActivityKind(activityKind: string): activityKind is "task.started" | "task.progress" | "task.completed" {
+  return activityKind === "task.started" || activityKind === "task.progress" || activityKind === "task.completed";
+}
+
+function taskPhaseFromActivityKind(
+  activityKind: "task.started" | "task.progress" | "task.completed",
+): "started" | "progress" | "completed" {
+  if (activityKind === "task.started") return "started";
+  if (activityKind === "task.progress") return "progress";
+  return "completed";
+}
+
+function humanizeTaskType(taskType: string | undefined): string | undefined {
+  if (!taskType) {
+    return undefined;
+  }
+  if (taskType === "local_agent") {
+    return "Local agent";
+  }
+  return taskType
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ")
+    .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function buildTaskLabel(input: {
+  phase: "started" | "progress" | "completed";
+  taskTypeLabel?: string;
+  status?: "completed" | "failed" | "stopped";
+}): string {
+  if (input.phase === "started") {
+    return "Started";
+  }
+  if (input.phase === "progress") {
+    return "Working";
+  }
+  if (input.status === "failed") {
+    return "Failed";
+  }
+  if (input.status === "stopped") {
+    return "Stopped";
+  }
+  return "Completed";
 }
 
 function compareActivitiesByOrder(

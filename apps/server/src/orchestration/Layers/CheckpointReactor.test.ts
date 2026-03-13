@@ -321,6 +321,7 @@ describe("CheckpointReactor", () => {
 
     return {
       engine,
+      reactor,
       provider,
       cwd,
     };
@@ -765,9 +766,11 @@ describe("CheckpointReactor", () => {
       turnId: asTurnId("turn-after-runtime-failure"),
     });
 
+    await Effect.runPromise(harness.reactor.drain);
     await waitForGitRefExists(
       harness.cwd,
       checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0),
+      5000,
     );
     expect(
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 0)),

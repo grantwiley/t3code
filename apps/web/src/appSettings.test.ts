@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getDefaultModel } from "@t3tools/shared/model";
 
 import {
   getAppModelOptions,
@@ -74,7 +75,7 @@ describe("resolveAppModelSelection", () => {
   });
 
   it("falls back to the provider default when no model is selected", () => {
-    expect(resolveAppModelSelection("codex", [], "")).toBe("gpt-5.4");
+    expect(resolveAppModelSelection("codex", [], "")).toBe(getDefaultModel("codex"));
   });
 });
 

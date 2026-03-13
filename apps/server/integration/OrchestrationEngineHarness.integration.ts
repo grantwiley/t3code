@@ -25,6 +25,7 @@ import { CheckpointStoreLive } from "../src/checkpointing/Layers/CheckpointStore
 import { CheckpointStore } from "../src/checkpointing/Services/CheckpointStore.ts";
 import { GitCore, type GitCoreShape } from "../src/git/Services/GitCore.ts";
 import { TextGeneration, type TextGenerationShape } from "../src/git/Services/TextGeneration.ts";
+import { CheckpointReactor } from "../src/orchestration/Services/CheckpointReactor.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../src/persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../src/persistence/Layers/OrchestrationEventStore.ts";
 import { ProjectionCheckpointRepositoryLive } from "../src/persistence/Layers/ProjectionCheckpoints.ts";
@@ -51,6 +52,8 @@ import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
+import { ProviderCommandReactor } from "../src/orchestration/Services/ProviderCommandReactor.ts";
+import { ProviderRuntimeIngestionService } from "../src/orchestration/Services/ProviderRuntimeIngestion.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
 import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
 
@@ -101,26 +104,46 @@ function waitFor<A, E>(
   read: Effect.Effect<A, E>,
   predicate: (value: A) => boolean,
   description: string,
-  timeoutMs?: number,
+  timeoutOrOptions?:
+    | number
+    | {
+        readonly timeoutMs?: number;
+        readonly beforeRead?: Effect.Effect<void, never>;
+      },
 ): Effect.Effect<A, never>;
 function waitFor<A, B extends A, E>(
   read: Effect.Effect<A, E>,
   predicate: (value: A) => value is B,
   description: string,
-  timeoutMs?: number,
+  timeoutOrOptions?:
+    | number
+    | {
+        readonly timeoutMs?: number;
+        readonly beforeRead?: Effect.Effect<void, never>;
+      },
 ): Effect.Effect<B, never>;
 function waitFor<A, E>(
   read: Effect.Effect<A, E>,
   predicate: (value: A) => boolean,
   description: string,
-  timeoutMs = 3000,
+  timeoutOrOptions?:
+    | number
+    | {
+        readonly timeoutMs?: number;
+        readonly beforeRead?: Effect.Effect<void, never>;
+      },
 ): Effect.Effect<A, never> {
+  const timeoutMs =
+    typeof timeoutOrOptions === "number" ? timeoutOrOptions : (timeoutOrOptions?.timeoutMs ?? 3000);
+  const beforeRead =
+    typeof timeoutOrOptions === "number" ? undefined : timeoutOrOptions?.beforeRead;
   const RETRY_SIGNAL = "wait_for_retry";
   const retryIntervalMs = 10;
   const maxRetries = Math.max(0, Math.floor(timeoutMs / retryIntervalMs));
   const retrySchedule = Schedule.spaced(`${retryIntervalMs} millis`);
+  const preparedRead = beforeRead ? Effect.flatMap(beforeRead, () => read) : read;
 
-  return read.pipe(
+  return preparedRead.pipe(
     Effect.filterOrFail(predicate, () => RETRY_SIGNAL),
     Effect.retry({
       schedule: retrySchedule,
@@ -305,6 +328,17 @@ export const makeOrchestrationIntegrationHarness = (
     const snapshotQuery = yield* tryRuntimePromise("load ProjectionSnapshotQuery service", () =>
       runtime.runPromise(Effect.service(ProjectionSnapshotQuery)),
     ).pipe(Effect.orDie);
+    const providerRuntimeIngestion = yield* tryRuntimePromise(
+      "load ProviderRuntimeIngestionService service",
+      () => runtime.runPromise(Effect.service(ProviderRuntimeIngestionService)),
+    ).pipe(Effect.orDie);
+    const providerCommandReactor = yield* tryRuntimePromise(
+      "load ProviderCommandReactor service",
+      () => runtime.runPromise(Effect.service(ProviderCommandReactor)),
+    ).pipe(Effect.orDie);
+    const checkpointReactor = yield* tryRuntimePromise("load CheckpointReactor service", () =>
+      runtime.runPromise(Effect.service(CheckpointReactor)),
+    ).pipe(Effect.orDie);
     const providerService = yield* tryRuntimePromise("load ProviderService service", () =>
       runtime.runPromise(Effect.service(ProviderService)),
     ).pipe(Effect.orDie);
@@ -326,6 +360,18 @@ export const makeOrchestrationIntegrationHarness = (
     ).pipe(Effect.orDie);
     yield* sleep(10);
 
+    const settleAsyncWork: Effect.Effect<void, never, never> = Effect.gen(function* () {
+      for (let index = 0; index < 3; index += 1) {
+        yield* providerCommandReactor.drain;
+        yield* providerRuntimeIngestion.drain;
+        yield* checkpointReactor.drain;
+      }
+    }) as Effect.Effect<void, never, never>;
+    const waitOptions = (timeoutMs?: number) =>
+      timeoutMs === undefined
+        ? { beforeRead: settleAsyncWork }
+        : { timeoutMs, beforeRead: settleAsyncWork };
+
     const waitForThread: OrchestrationIntegrationHarness["waitForThread"] = (
       threadId,
       predicate,
@@ -341,7 +387,7 @@ export const makeOrchestrationIntegrationHarness = (
           ),
         (thread): thread is OrchestrationThread => thread !== null && predicate(thread),
         `projected thread '${threadId}'`,
-        timeoutMs,
+        waitOptions(timeoutMs),
       ) as Effect.Effect<OrchestrationThread, never>;
 
     const waitForDomainEvent: OrchestrationIntegrationHarness["waitForDomainEvent"] = (
@@ -354,7 +400,7 @@ export const makeOrchestrationIntegrationHarness = (
         ),
         (events) => events.some(predicate),
         "domain event",
-        timeoutMs,
+        waitOptions(timeoutMs),
       );
 
     const waitForPendingApproval: OrchestrationIntegrationHarness["waitForPendingApproval"] = (
@@ -385,7 +431,7 @@ export const makeOrchestrationIntegrationHarness = (
           readonly resolvedAt: string | null;
         } => row !== null && predicate(row),
         `pending approval '${requestId}'`,
-        timeoutMs,
+        waitOptions(timeoutMs),
       ) as Effect.Effect<
         {
           readonly status: "pending" | "resolved";

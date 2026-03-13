@@ -14,7 +14,9 @@ import {
 import { Cache, Cause, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
+import { ensurePreTurnBaseline } from "../../checkpointing/PreTurnBaseline.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
@@ -129,6 +131,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
+  const checkpointStore = yield* CheckpointStore;
   const git = yield* GitCore;
   const textGeneration = yield* TextGeneration;
   const handledTurnStartKeys = yield* Cache.make<string, true>({
@@ -333,6 +336,7 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    const readModel = yield* orchestrationEngine.getReadModel();
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.provider !== undefined ? { provider: input.provider } : {}),
       ...(input.model !== undefined ? { model: input.model } : {}),
@@ -343,6 +347,17 @@ const make = Effect.gen(function* () {
     const activeSession = yield* providerService.listSessions().pipe(
       Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
     );
+    const baseline = yield* ensurePreTurnBaseline({
+      thread,
+      projects: readModel.projects,
+      sessionCwd: activeSession?.cwd,
+      checkpointStore,
+    });
+    if (baseline.status === "skipped-no-cwd") {
+      yield* Effect.logWarning("provider command reactor skipped pre-turn checkpoint baseline", {
+        threadId: input.threadId,
+      });
+    }
     const sessionModelSwitch =
       activeSession === undefined
         ? "in-session"

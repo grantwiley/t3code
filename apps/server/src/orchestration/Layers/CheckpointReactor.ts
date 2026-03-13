@@ -11,6 +11,7 @@ import { Cause, Effect, Layer, Option, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { parseTurnDiffFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
+import { ensurePreTurnBaseline } from "../../checkpointing/PreTurnBaseline.ts";
 import {
   checkpointRefForThreadTurn,
   resolveThreadWorkspaceCwd,
@@ -303,41 +304,18 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const checkpointCwdFromThreadOrProject = resolveThreadWorkspaceCwd({
+    const baseline = yield* ensurePreTurnBaseline({
       thread,
       projects: readModel.projects,
+      sessionCwd: Option.getOrUndefined(yield* resolveSessionRuntimeForThread(thread.id))?.cwd,
+      checkpointStore,
     });
-    const checkpointCwd =
-      checkpointCwdFromThreadOrProject ??
-      Option.match(yield* resolveSessionRuntimeForThread(thread.id), {
-        onNone: () => undefined,
-        onSome: (runtime) => runtime.cwd,
-      });
-    if (!checkpointCwd) {
+    if (baseline.status === "skipped-no-cwd") {
       yield* Effect.logWarning("checkpoint pre-turn capture skipped: no workspace cwd", {
         threadId: thread.id,
         turnId,
       });
-      return;
     }
-
-    const currentTurnCount = thread.checkpoints.reduce(
-      (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
-      0,
-    );
-    const baselineCheckpointRef = checkpointRefForThreadTurn(thread.id, currentTurnCount);
-    const baselineExists = yield* checkpointStore.hasCheckpointRef({
-      cwd: checkpointCwd,
-      checkpointRef: baselineCheckpointRef,
-    });
-    if (baselineExists) {
-      return;
-    }
-
-    yield* checkpointStore.captureCheckpoint({
-      cwd: checkpointCwd,
-      checkpointRef: baselineCheckpointRef,
-    });
   });
 
   const ensurePreTurnBaselineFromDomainTurnStart = Effect.fnUntraced(function* (
@@ -363,40 +341,17 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const checkpointCwdFromThreadOrProject = resolveThreadWorkspaceCwd({
+    const baseline = yield* ensurePreTurnBaseline({
       thread,
       projects: readModel.projects,
+      sessionCwd: Option.getOrUndefined(yield* resolveSessionRuntimeForThread(threadId))?.cwd,
+      checkpointStore,
     });
-    const checkpointCwd =
-      checkpointCwdFromThreadOrProject ??
-      Option.match(yield* resolveSessionRuntimeForThread(threadId), {
-        onNone: () => undefined,
-        onSome: (runtime) => runtime.cwd,
-      });
-    if (!checkpointCwd) {
+    if (baseline.status === "skipped-no-cwd") {
       yield* Effect.logWarning("checkpoint pre-turn capture skipped: no workspace cwd", {
         threadId,
       });
-      return;
     }
-
-    const currentTurnCount = thread.checkpoints.reduce(
-      (maxTurnCount, checkpoint) => Math.max(maxTurnCount, checkpoint.checkpointTurnCount),
-      0,
-    );
-    const baselineCheckpointRef = checkpointRefForThreadTurn(threadId, currentTurnCount);
-    const baselineExists = yield* checkpointStore.hasCheckpointRef({
-      cwd: checkpointCwd,
-      checkpointRef: baselineCheckpointRef,
-    });
-    if (baselineExists) {
-      return;
-    }
-
-    yield* checkpointStore.captureCheckpoint({
-      cwd: checkpointCwd,
-      checkpointRef: baselineCheckpointRef,
-    });
   });
 
   const handleRevertRequested = Effect.fnUntraced(function* (
