@@ -18,6 +18,7 @@ import {
   type ProviderUserInputAnswers,
   type ChatAttachment,
 } from "@t3tools/contracts";
+import { qualifyPiModelForLaunch } from "@t3tools/shared/model";
 import { Effect, Layer, Queue, Stream } from "effect";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -180,13 +181,14 @@ function buildPiLaunchModel(
   model: string | undefined,
   thinkingLevel: string | undefined,
 ): string | undefined {
-  if (!model) {
+  const launchModel = qualifyPiModelForLaunch(model);
+  if (!launchModel) {
     return undefined;
   }
-  if (!thinkingLevel || model.includes(":")) {
-    return model;
+  if (!thinkingLevel || launchModel.includes(":")) {
+    return launchModel;
   }
-  return `${model}:${thinkingLevel}`;
+  return `${launchModel}:${thinkingLevel}`;
 }
 
 function resolvePiApprovalBridgePath(): string {

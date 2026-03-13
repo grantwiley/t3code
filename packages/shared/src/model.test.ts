@@ -18,6 +18,7 @@ import {
   getReasoningEffortOptions,
   normalizeModelSlug,
   parseCursorModelSelection,
+  qualifyPiModelForLaunch,
   resolveCursorModelFromSelection,
   resolveModelSlug,
   resolveModelSlugForProvider,
@@ -55,6 +56,7 @@ describe("normalizeModelSlug", () => {
     expect(normalizeModelSlug("claude-4.6-sonnet-thinking", "cursor")).toBe(
       "sonnet-4.6-thinking",
     );
+    expect(normalizeModelSlug("5.4", "pi")).toBe("gpt-5.4");
   });
 });
 
@@ -101,6 +103,22 @@ describe("resolveModelSlug", () => {
     expect(getModelOptions("claudeCode")).toEqual(MODEL_OPTIONS_BY_PROVIDER.claudeCode);
     expect(getModelOptions("cursor")).toEqual(MODEL_OPTIONS_BY_PROVIDER.cursor);
     expect(getCursorModelFamilyOptions()).toEqual(CURSOR_MODEL_FAMILY_OPTIONS);
+  });
+});
+
+describe("qualifyPiModelForLaunch", () => {
+  it("qualifies the built-in Pi GPT-5.4 model to OpenAI OAuth", () => {
+    expect(qualifyPiModelForLaunch("gpt-5.4")).toBe("openai-codex/gpt-5.4");
+    expect(qualifyPiModelForLaunch("gpt-5.4:high")).toBe("openai-codex/gpt-5.4:high");
+    expect(qualifyPiModelForLaunch("5.4")).toBe("openai-codex/gpt-5.4");
+  });
+
+  it("preserves already-qualified and custom Pi models", () => {
+    expect(qualifyPiModelForLaunch("openai-codex/gpt-5.4")).toBe("openai-codex/gpt-5.4");
+    expect(qualifyPiModelForLaunch("anthropic/claude-sonnet-4")).toBe(
+      "anthropic/claude-sonnet-4",
+    );
+    expect(qualifyPiModelForLaunch("custom/internal-model")).toBe("custom/internal-model");
   });
 });
 

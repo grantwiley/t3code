@@ -160,7 +160,9 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "opus-4.6-thinking": "opus-4.6-thinking",
     "opus-4.5-thinking": "opus-4.5-thinking",
   },
-  pi: {},
+  pi: {
+    "5.4": "gpt-5.4",
+  },
 };
 
 export const REASONING_EFFORT_OPTIONS_BY_PROVIDER = {

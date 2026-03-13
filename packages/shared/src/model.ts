@@ -99,6 +99,9 @@ const MODEL_SLUG_SET_BY_PROVIDER: Record<ProviderKind, ReadonlySet<ModelSlug>> =
 const CURSOR_MODEL_FAMILY_SET = new Set<CursorModelFamily>(
   CURSOR_MODEL_FAMILY_OPTIONS.map((option) => option.slug),
 );
+const PI_QUALIFIED_MODEL_BY_SLUG: Readonly<Record<string, string>> = {
+  "gpt-5.4": "openai-codex/gpt-5.4",
+};
 
 export interface CursorModelSelection {
   readonly family: CursorModelFamily;
@@ -266,6 +269,29 @@ export function resolveModelSlugForProvider(
   model: string | null | undefined,
 ): ModelSlug {
   return resolveModelSlug(model, provider);
+}
+
+export function qualifyPiModelForLaunch(model: string | null | undefined): string | null {
+  if (typeof model !== "string") {
+    return null;
+  }
+
+  const trimmed = model.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const separatorIndex = trimmed.indexOf(":");
+  const modelPattern = separatorIndex >= 0 ? trimmed.slice(0, separatorIndex) : trimmed;
+  const suffix = separatorIndex >= 0 ? trimmed.slice(separatorIndex) : "";
+  const normalized = normalizeModelSlug(modelPattern, "pi");
+  if (!normalized) {
+    return null;
+  }
+
+  const qualified =
+    normalized.includes("/") ? normalized : (PI_QUALIFIED_MODEL_BY_SLUG[normalized] ?? normalized);
+  return `${qualified}${suffix}`;
 }
 
 export function getReasoningEffortOptions(
