@@ -1,9 +1,11 @@
 import {
   ApprovalRequestId,
+  isToolLifecycleItemType,
   type OrchestrationLatestTurn,
   type OrchestrationThreadActivity,
   type OrchestrationProposedPlanId,
   type ProviderKind,
+  type ToolLifecycleItemType,
   type UserInputQuestion,
   type TurnId,
 } from "@t3tools/contracts";
@@ -39,6 +41,9 @@ export interface WorkLogEntry {
     status?: "completed" | "failed" | "stopped";
     lastToolName?: string;
   };
+  toolTitle?: string;
+  itemType?: ToolLifecycleItemType;
+  requestKind?: PendingApproval["requestKind"];
 }
 
 export interface PendingApproval {
@@ -91,14 +96,6 @@ export type TimelineEntry =
       createdAt: string;
       entry: WorkLogEntry;
     };
-
-export function formatTimestamp(isoDate: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-  }).format(new Date(isoDate));
-}
 
 export function formatDuration(durationMs: number): string {
   if (!Number.isFinite(durationMs) || durationMs < 0) return "0ms";
@@ -428,6 +425,7 @@ export function deriveWorkLogEntries(
           : null;
       const command = extractToolCommand(payload);
       const changedFiles = extractChangedFiles(payload);
+      const title = extractToolTitle(payload);
       const entry: WorkLogEntry = {
         id: activity.id,
         createdAt: activity.createdAt,
@@ -435,7 +433,6 @@ export function deriveWorkLogEntries(
         activityKind: activity.kind,
         tone: activity.tone === "approval" ? "info" : activity.tone,
       };
-
       const payloadTaskId =
         payload && typeof payload.taskId === "string" && payload.taskId.length > 0
           ? payload.taskId
@@ -451,10 +448,13 @@ export function deriveWorkLogEntries(
       const rememberedTaskType =
         payloadTaskType ?? (payloadTaskId ? taskTypeById.get(payloadTaskId) : undefined);
       const detail = workLogDetailFromPayload(payload);
+      const normalizedDetail = detail ? stripTrailingExitCode(detail).output ?? undefined : undefined;
       const lastToolName =
         payload && typeof payload.lastToolName === "string" && payload.lastToolName.length > 0
           ? payload.lastToolName
           : undefined;
+      const itemType = extractWorkLogItemType(payload);
+      const requestKind = extractWorkLogRequestKind(payload);
 
       if (payloadTaskId && isTaskActivityKind(activity.kind)) {
         const taskPhase = taskPhaseFromActivityKind(activity.kind);
@@ -472,14 +472,23 @@ export function deriveWorkLogEntries(
         });
         entry.tone =
           activity.kind === "task.completed" && payload?.status === "failed" ? "error" : "thinking";
-        if (detail) {
-          entry.detail = detail;
+        if (normalizedDetail) {
+          entry.detail = normalizedDetail;
         }
         if (command) {
           entry.command = command;
         }
         if (changedFiles.length > 0) {
           entry.changedFiles = changedFiles;
+        }
+        if (title) {
+          entry.toolTitle = title;
+        }
+        if (itemType) {
+          entry.itemType = itemType;
+        }
+        if (requestKind) {
+          entry.requestKind = requestKind;
         }
         entry.task = {
           id: payloadTaskId,
@@ -498,14 +507,23 @@ export function deriveWorkLogEntries(
         return entry;
       }
 
-      if (detail) {
-        entry.detail = detail;
+      if (normalizedDetail) {
+        entry.detail = normalizedDetail;
       }
       if (command) {
         entry.command = command;
       }
       if (changedFiles.length > 0) {
         entry.changedFiles = changedFiles;
+      }
+      if (title) {
+        entry.toolTitle = title;
+      }
+      if (itemType) {
+        entry.itemType = itemType;
+      }
+      if (requestKind) {
+        entry.requestKind = requestKind;
       }
       return entry;
     });
@@ -573,6 +591,53 @@ function extractToolCommand(payload: Record<string, unknown> | null): string | n
   return candidates.find((candidate) => candidate !== null) ?? null;
 }
 
+function extractToolTitle(payload: Record<string, unknown> | null): string | null {
+  return asTrimmedString(payload?.title);
+}
+
+function stripTrailingExitCode(value: string): {
+  output: string | null;
+  exitCode?: number | undefined;
+} {
+  const trimmed = value.trim();
+  const match = /^(?<output>[\s\S]*?)(?:\s*<exited with exit code (?<code>\d+)>)\s*$/i.exec(
+    trimmed,
+  );
+  if (!match?.groups) {
+    return {
+      output: trimmed.length > 0 ? trimmed : null,
+    };
+  }
+  const exitCode = Number.parseInt(match.groups.code ?? "", 10);
+  const normalizedOutput = match.groups.output?.trim() ?? "";
+  return {
+    output: normalizedOutput.length > 0 ? normalizedOutput : null,
+    ...(Number.isInteger(exitCode) ? { exitCode } : {}),
+  };
+}
+
+function extractWorkLogItemType(
+  payload: Record<string, unknown> | null,
+): WorkLogEntry["itemType"] | undefined {
+  if (typeof payload?.itemType === "string" && isToolLifecycleItemType(payload.itemType)) {
+    return payload.itemType;
+  }
+  return undefined;
+}
+
+function extractWorkLogRequestKind(
+  payload: Record<string, unknown> | null,
+): WorkLogEntry["requestKind"] | undefined {
+  if (
+    payload?.requestKind === "command" ||
+    payload?.requestKind === "file-read" ||
+    payload?.requestKind === "file-change"
+  ) {
+    return payload.requestKind;
+  }
+  return requestKindFromRequestType(payload?.requestType) ?? undefined;
+}
+
 function pushChangedFile(target: string[], seen: Set<string>, value: unknown) {
   const normalized = asTrimmedString(value);
   if (!normalized || seen.has(normalized)) {
@@ -631,9 +696,9 @@ function collectChangedFiles(value: unknown, target: string[], seen: Set<string>
 }
 
 function extractChangedFiles(payload: Record<string, unknown> | null): string[] {
-  const data = asRecord(payload?.data);
   const changedFiles: string[] = [];
-  collectChangedFiles(data, changedFiles, new Set<string>(), 0);
+  const seen = new Set<string>();
+  collectChangedFiles(asRecord(payload?.data), changedFiles, seen, 0);
   return changedFiles;
 }
 

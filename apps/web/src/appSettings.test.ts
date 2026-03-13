@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { getDefaultModel } from "@t3tools/shared/model";
 
 import {
+  DEFAULT_TIMESTAMP_FORMAT,
   getAppModelOptions,
   getSlashModelOptions,
   normalizeCustomModelSlugs,
@@ -108,5 +109,11 @@ describe("getSlashModelOptions", () => {
 
     expect(claudeOptions.some((option) => option.slug === "claude/custom-opus")).toBe(true);
     expect(cursorOptions.some((option) => option.slug === "cursor/custom-model")).toBe(true);
+  });
+});
+
+describe("timestamp format defaults", () => {
+  it("defaults timestamp format to locale", () => {
+    expect(DEFAULT_TIMESTAMP_FORMAT).toBe("locale");
   });
 });
