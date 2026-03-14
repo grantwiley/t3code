@@ -89,6 +89,31 @@ describe("ProviderSessionStartInput", () => {
     expect(parsed.providerOptions?.cursor?.binaryPath).toBe("/usr/local/bin/agent");
     expect(parsed.runtimeMode).toBe("approval-required");
   });
+
+  it("accepts pi thinking level payloads", () => {
+    const parsed = decodeProviderSessionStartInput({
+      threadId: "thread-1",
+      provider: "pi",
+      cwd: "/tmp/workspace",
+      model: "gpt-5.4",
+      modelOptions: {
+        pi: {
+          thinkingLevel: "xhigh",
+        },
+      },
+      providerOptions: {
+        pi: {
+          binaryPath: "/usr/local/bin/pi",
+          sessionDir: "/tmp/pi-session",
+        },
+      },
+      runtimeMode: "full-access",
+    });
+    expect(parsed.provider).toBe("pi");
+    expect(parsed.modelOptions?.pi?.thinkingLevel).toBe("xhigh");
+    expect(parsed.providerOptions?.pi?.binaryPath).toBe("/usr/local/bin/pi");
+    expect(parsed.providerOptions?.pi?.sessionDir).toBe("/tmp/pi-session");
+  });
 });
 
 describe("ProviderSendTurnInput", () => {

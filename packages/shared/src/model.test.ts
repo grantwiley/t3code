@@ -181,6 +181,10 @@ describe("getReasoningEffortOptions", () => {
   it("returns no reasoning options for cursor", () => {
     expect(getReasoningEffortOptions("cursor")).toEqual([]);
   });
+
+  it("returns reasoning options for pi", () => {
+    expect(getReasoningEffortOptions("pi")).toEqual(REASONING_EFFORT_OPTIONS_BY_PROVIDER.pi);
+  });
 });
 
 describe("getDefaultReasoningEffort", () => {
@@ -194,5 +198,6 @@ describe("getDefaultReasoningEffort", () => {
     expect(getDefaultReasoningEffort("cursor")).toBe(
       DEFAULT_REASONING_EFFORT_BY_PROVIDER.cursor,
     );
+    expect(getDefaultReasoningEffort("pi")).toBe(DEFAULT_REASONING_EFFORT_BY_PROVIDER.pi);
   });
 });

@@ -34,7 +34,9 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   onTogglePlanSidebar: () => void;
   onToggleRuntimeMode: () => void;
 }) {
-  const defaultReasoningEffort = getDefaultReasoningEffort("codex");
+  const defaultReasoningEffort = getDefaultReasoningEffort(props.selectedProvider);
+  const showReasoningControls = props.selectedEffort != null && props.reasoningOptions.length > 0;
+  const showCodexFastMode = props.selectedProvider === "codex";
   const reasoningLabelByOption: Record<CodexReasoningEffort, string> = {
     low: "Low",
     medium: "Medium",
@@ -57,7 +59,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
         <EllipsisIcon aria-hidden="true" className="size-4" />
       </MenuTrigger>
       <MenuPopup align="start">
-        {props.selectedProvider === "codex" && props.selectedEffort != null ? (
+        {showReasoningControls ? (
           <>
             <MenuGroup>
               <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Reasoning</div>
@@ -78,19 +80,25 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
                 ))}
               </MenuRadioGroup>
             </MenuGroup>
-            <MenuDivider />
-            <MenuGroup>
-              <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Fast Mode</div>
-              <MenuRadioGroup
-                value={props.selectedCodexFastModeEnabled ? "on" : "off"}
-                onValueChange={(value) => {
-                  props.onCodexFastModeChange(value === "on");
-                }}
-              >
-                <MenuRadioItem value="off">off</MenuRadioItem>
-                <MenuRadioItem value="on">on</MenuRadioItem>
-              </MenuRadioGroup>
-            </MenuGroup>
+            {showCodexFastMode ? (
+              <>
+                <MenuDivider />
+                <MenuGroup>
+                  <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">
+                    Fast Mode
+                  </div>
+                  <MenuRadioGroup
+                    value={props.selectedCodexFastModeEnabled ? "on" : "off"}
+                    onValueChange={(value) => {
+                      props.onCodexFastModeChange(value === "on");
+                    }}
+                  >
+                    <MenuRadioItem value="off">off</MenuRadioItem>
+                    <MenuRadioItem value="on">on</MenuRadioItem>
+                  </MenuRadioGroup>
+                </MenuGroup>
+              </>
+            ) : null}
             <MenuDivider />
           </>
         ) : null}

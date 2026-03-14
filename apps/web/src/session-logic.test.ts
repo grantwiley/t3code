@@ -572,6 +572,64 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("extracts Pi tool metadata from lifecycle updates into structured work rows", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "pi-bash",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.updated",
+        summary: "bash",
+        tone: "tool",
+        payload: {
+          itemType: "command_execution",
+          title: "bash",
+          status: "inProgress",
+          detail: "bun run lint",
+          data: {
+            toolName: "bash",
+            input: {
+              command: "bun run lint",
+              cwd: "apps/web",
+            },
+            item: {
+              input: {
+                command: "bun run lint",
+                cwd: "apps/web",
+              },
+              result: {
+                command: "bun run lint",
+              },
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toEqual([
+      {
+        id: "pi-bash",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        label: "bash",
+        tone: "tool",
+        activityKind: "tool.updated",
+        detail: "bun run lint",
+        command: "bun run lint",
+        itemType: "command_execution",
+        toolTitle: "bash",
+        toolCall: {
+          name: "bash",
+          status: "updated",
+          inputSummary: [
+            {
+              label: "cwd",
+              value: "apps/web",
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
   it("extracts changed file paths for file-change tool activities", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

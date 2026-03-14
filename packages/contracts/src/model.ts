@@ -169,12 +169,12 @@ export const REASONING_EFFORT_OPTIONS_BY_PROVIDER = {
   codex: CODEX_REASONING_EFFORT_OPTIONS,
   claudeCode: [],
   cursor: [],
-  pi: [],
+  pi: CODEX_REASONING_EFFORT_OPTIONS,
 } as const satisfies Record<ProviderKind, readonly CodexReasoningEffort[]>;
 
 export const DEFAULT_REASONING_EFFORT_BY_PROVIDER = {
   codex: "high",
   claudeCode: null,
   cursor: null,
-  pi: null,
+  pi: "high",
 } as const satisfies Record<ProviderKind, CodexReasoningEffort | null>;

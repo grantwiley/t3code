@@ -1,4 +1,4 @@
-import { type CodexReasoningEffort } from "@t3tools/contracts";
+import { type CodexReasoningEffort, type ProviderKind } from "@t3tools/contracts";
 import { getDefaultReasoningEffort } from "@t3tools/shared/model";
 import { memo, useState } from "react";
 import { ChevronDownIcon } from "lucide-react";
@@ -14,6 +14,7 @@ import {
 } from "../ui/menu";
 
 export const CodexTraitsPicker = memo(function CodexTraitsPicker(props: {
+  provider: ProviderKind;
   effort: CodexReasoningEffort;
   fastModeEnabled: boolean;
   options: ReadonlyArray<CodexReasoningEffort>;
@@ -21,7 +22,8 @@ export const CodexTraitsPicker = memo(function CodexTraitsPicker(props: {
   onFastModeChange: (enabled: boolean) => void;
 }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const defaultReasoningEffort = getDefaultReasoningEffort("codex");
+  const defaultReasoningEffort = getDefaultReasoningEffort(props.provider);
+  const showFastMode = props.provider === "codex";
   const reasoningLabelByOption: Record<CodexReasoningEffort, string> = {
     low: "Low",
     medium: "Medium",
@@ -74,19 +76,23 @@ export const CodexTraitsPicker = memo(function CodexTraitsPicker(props: {
             ))}
           </MenuRadioGroup>
         </MenuGroup>
-        <MenuDivider />
-        <MenuGroup>
-          <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Fast Mode</div>
-          <MenuRadioGroup
-            value={props.fastModeEnabled ? "on" : "off"}
-            onValueChange={(value) => {
-              props.onFastModeChange(value === "on");
-            }}
-          >
-            <MenuRadioItem value="off">off</MenuRadioItem>
-            <MenuRadioItem value="on">on</MenuRadioItem>
-          </MenuRadioGroup>
-        </MenuGroup>
+        {showFastMode ? (
+          <>
+            <MenuDivider />
+            <MenuGroup>
+              <div className="px-2 py-1.5 font-medium text-muted-foreground text-xs">Fast Mode</div>
+              <MenuRadioGroup
+                value={props.fastModeEnabled ? "on" : "off"}
+                onValueChange={(value) => {
+                  props.onFastModeChange(value === "on");
+                }}
+              >
+                <MenuRadioItem value="off">off</MenuRadioItem>
+                <MenuRadioItem value="on">on</MenuRadioItem>
+              </MenuRadioGroup>
+            </MenuGroup>
+          </>
+        ) : null}
       </MenuPopup>
     </Menu>
   );

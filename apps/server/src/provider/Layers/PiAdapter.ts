@@ -61,13 +61,20 @@ interface PendingRpcResponse {
   readonly timer: ReturnType<typeof setTimeout>;
 }
 
+interface PiToolState {
+  readonly itemId: RuntimeItemId;
+  readonly itemType: CanonicalItemType;
+  readonly toolName: string;
+  readonly input: Record<string, unknown>;
+}
+
 interface PiTurnState {
   readonly turnId: TurnId;
   readonly assistantItemId: RuntimeItemId;
   readonly startedAt: string;
   aborted: boolean;
   assistantHasVisibleOutput: boolean;
-  readonly toolItemIds: Map<string, RuntimeItemId>;
+  readonly toolStates: Map<string, PiToolState>;
 }
 
 interface PiSessionContext {
@@ -226,6 +233,26 @@ function summarizeToolArgs(args: unknown): string | undefined {
     return trimmed.length > 0 ? trimmed : undefined;
   }
   return undefined;
+}
+
+function normalizeToolInput(args: unknown): Record<string, unknown> {
+  return asRecord(args) ?? {};
+}
+
+function buildToolLifecycleData(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  result?: unknown,
+): Record<string, unknown> {
+  return {
+    toolName,
+    input: toolInput,
+    item: {
+      input: toolInput,
+      ...(result !== undefined ? { result } : {}),
+    },
+    ...(result !== undefined ? { result } : {}),
+  };
 }
 
 function providerError(method: string, detail: string, cause?: unknown): ProviderAdapterRequestError {
@@ -432,7 +459,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           startedAt: createdAt,
           aborted: false,
           assistantHasVisibleOutput: false,
-          toolItemIds: new Map(),
+          toolStates: new Map(),
         };
         context.session = {
           ...context.session,
@@ -481,12 +508,18 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const toolCallId = asString(event.toolCallId) ?? crypto.randomUUID();
         const toolName = asString(event.toolName) ?? "tool";
         const itemId = RuntimeItemId.makeUnsafe(`pi:tool:${toolCallId}`);
-        if (context.turnState) {
-          context.turnState.toolItemIds.set(toolCallId, itemId);
-        }
         const createdAt = nowIso();
         const itemType = classifyToolItemType(toolName);
-        const detail = summarizeToolArgs(event.args);
+        const toolInput = normalizeToolInput(event.args);
+        if (context.turnState) {
+          context.turnState.toolStates.set(toolCallId, {
+            itemId,
+            itemType,
+            toolName,
+            input: toolInput,
+          });
+        }
+        const detail = summarizeToolArgs(toolInput);
         yield* publishRuntimeEvent(
           makeRuntimeEvent({
             eventId: EventId.makeUnsafe(crypto.randomUUID()),
@@ -500,7 +533,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               status: "inProgress",
               title: toolName,
               ...(detail ? { detail } : {}),
-              ...(event.args !== undefined ? { data: event.args } : {}),
+              data: buildToolLifecycleData(toolName, toolInput),
             },
           }),
         );
@@ -524,12 +557,21 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const handleToolUpdate = (context: PiSessionContext, event: Record<string, unknown>) =>
       Effect.gen(function* () {
         const toolCallId = asString(event.toolCallId) ?? crypto.randomUUID();
-        const toolName = asString(event.toolName) ?? "tool";
+        const previousToolState = context.turnState?.toolStates.get(toolCallId);
+        const toolName = previousToolState?.toolName ?? asString(event.toolName) ?? "tool";
         const createdAt = nowIso();
-        const itemId =
-          context.turnState?.toolItemIds.get(toolCallId) ??
-          RuntimeItemId.makeUnsafe(`pi:tool:${toolCallId}`);
-        const detail = extractTextContent(event.partialResult) ?? summarizeToolArgs(event.args);
+        const itemId = previousToolState?.itemId ?? RuntimeItemId.makeUnsafe(`pi:tool:${toolCallId}`);
+        const toolInput = asRecord(event.args) ?? previousToolState?.input ?? {};
+        const itemType = previousToolState?.itemType ?? classifyToolItemType(toolName);
+        if (context.turnState) {
+          context.turnState.toolStates.set(toolCallId, {
+            itemId,
+            itemType,
+            toolName,
+            input: toolInput,
+          });
+        }
+        const detail = extractTextContent(event.partialResult) ?? summarizeToolArgs(toolInput);
         yield* publishRuntimeEvent(
           makeRuntimeEvent({
             eventId: EventId.makeUnsafe(crypto.randomUUID()),
@@ -539,10 +581,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             itemId,
             type: "item.updated",
             payload: {
-              itemType: classifyToolItemType(toolName),
+              itemType,
               status: "inProgress",
               title: toolName,
               ...(detail ? { detail } : {}),
+              data: buildToolLifecycleData(toolName, toolInput, event.partialResult),
             },
           }),
         );
@@ -566,13 +609,15 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const handleToolEnd = (context: PiSessionContext, event: Record<string, unknown>) =>
       Effect.gen(function* () {
         const toolCallId = asString(event.toolCallId) ?? crypto.randomUUID();
-        const toolName = asString(event.toolName) ?? "tool";
+        const previousToolState = context.turnState?.toolStates.get(toolCallId);
+        const toolName = previousToolState?.toolName ?? asString(event.toolName) ?? "tool";
         const createdAt = nowIso();
-        const itemId =
-          context.turnState?.toolItemIds.get(toolCallId) ??
-          RuntimeItemId.makeUnsafe(`pi:tool:${toolCallId}`);
+        const itemId = previousToolState?.itemId ?? RuntimeItemId.makeUnsafe(`pi:tool:${toolCallId}`);
+        const toolInput = previousToolState?.input ?? normalizeToolInput(event.args);
+        const itemType = previousToolState?.itemType ?? classifyToolItemType(toolName);
         const detail = extractTextContent(event.result) ?? summarizeToolArgs(event.result);
         const status = event.isError === true ? "failed" : "completed";
+        context.turnState?.toolStates.delete(toolCallId);
         yield* publishRuntimeEvent(
           makeRuntimeEvent({
             eventId: EventId.makeUnsafe(crypto.randomUUID()),
@@ -582,11 +627,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             itemId,
             type: "item.completed",
             payload: {
-              itemType: classifyToolItemType(toolName),
+              itemType,
               status,
               title: toolName,
               ...(detail ? { detail } : {}),
-              ...(event.result !== undefined ? { data: event.result } : {}),
+              data: buildToolLifecycleData(toolName, toolInput, event.result),
             },
           }),
         );

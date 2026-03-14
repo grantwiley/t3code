@@ -364,6 +364,33 @@ describe("composerDraftStore codex fast mode", () => {
   });
 });
 
+describe("composerDraftStore effort", () => {
+  const threadId = ThreadId.makeUnsafe("thread-effort");
+
+  beforeEach(() => {
+    useComposerDraftStore.setState({
+      draftsByThreadId: {},
+      draftThreadsByThreadId: {},
+      projectDraftThreadIdByProjectId: {},
+    });
+  });
+
+  it("stores non-default reasoning effort in the draft", () => {
+    const store = useComposerDraftStore.getState();
+    store.setEffort(threadId, "xhigh");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.effort).toBe("xhigh");
+  });
+
+  it("clears reasoning effort when reset to the default", () => {
+    const store = useComposerDraftStore.getState();
+    store.setEffort(threadId, "xhigh");
+    store.setEffort(threadId, "high");
+
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});
+
 describe("composerDraftStore setModel", () => {
   const threadId = ThreadId.makeUnsafe("thread-model");
 

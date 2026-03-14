@@ -525,14 +525,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const selectedCodexFastModeEnabled =
     selectedProvider === "codex" ? composerDraft.codexFastMode : false;
   const selectedModelOptionsForDispatch = useMemo(() => {
-    if (selectedProvider !== "codex") {
-      return undefined;
+    if (selectedProvider === "codex") {
+      const codexOptions = {
+        ...(supportsReasoningEffort && selectedEffort ? { reasoningEffort: selectedEffort } : {}),
+        ...(selectedCodexFastModeEnabled ? { fastMode: true } : {}),
+      };
+      return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
     }
-    const codexOptions = {
-      ...(supportsReasoningEffort && selectedEffort ? { reasoningEffort: selectedEffort } : {}),
-      ...(selectedCodexFastModeEnabled ? { fastMode: true } : {}),
-    };
-    return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
+    if (selectedProvider === "pi") {
+      const piOptions = supportsReasoningEffort && selectedEffort ? { thinkingLevel: selectedEffort } : {};
+      return Object.keys(piOptions).length > 0 ? { pi: piOptions } : undefined;
+    }
+    return undefined;
   }, [selectedCodexFastModeEnabled, selectedEffort, selectedProvider, supportsReasoningEffort]);
   const providerOptionsForDispatch = useMemo(() => {
     const codex =
@@ -3550,13 +3554,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
                         />
                       ) : (
                         <>
-                          {selectedProvider === "codex" && selectedEffort != null ? (
+                          {supportsReasoningEffort && selectedEffort != null ? (
                             <>
                               <Separator
                                 orientation="vertical"
                                 className="mx-0.5 hidden h-4 sm:block"
                               />
                               <CodexTraitsPicker
+                                provider={selectedProvider}
                                 effort={selectedEffort}
                                 fastModeEnabled={selectedCodexFastModeEnabled}
                                 options={reasoningOptions}

@@ -106,6 +106,11 @@ Suggested shape:
 
 - `modelOptions.pi.thinkingLevel?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh"`
 
+Current implementation note:
+
+- the shared composer exposes Pi reasoning via the existing reasoning-effort control
+- selected efforts map directly to `modelOptions.pi.thinkingLevel` for `low | medium | high | xhigh`
+
 ### Model catalog strategy
 
 For v1, do **not** hardcode a large static pi model catalog into contracts.
