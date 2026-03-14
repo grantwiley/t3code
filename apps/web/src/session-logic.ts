@@ -449,7 +449,6 @@ export function deriveWorkLogEntries(
         entry.toolCall = toolCall;
         entry.label = toolCall.name;
       }
-
       const payloadTaskId =
         payload && typeof payload.taskId === "string" && payload.taskId.length > 0
           ? payload.taskId
@@ -465,6 +464,7 @@ export function deriveWorkLogEntries(
       const rememberedTaskType =
         payloadTaskType ?? (payloadTaskId ? taskTypeById.get(payloadTaskId) : undefined);
       const detail = workLogDetailFromPayload(payload);
+      const normalizedDetail = detail ? stripTrailingExitCode(detail).output ?? undefined : undefined;
       const lastToolName =
         payload && typeof payload.lastToolName === "string" && payload.lastToolName.length > 0
           ? payload.lastToolName
@@ -486,14 +486,26 @@ export function deriveWorkLogEntries(
         });
         entry.tone =
           activity.kind === "task.completed" && payload?.status === "failed" ? "error" : "thinking";
-        if (detail && !isRedundantToolDetail(detail, toolCall, command)) {
-          entry.detail = detail;
+        if (
+          normalizedDetail &&
+          (!detail || !isRedundantToolDetail(detail, toolCall, command))
+        ) {
+          entry.detail = normalizedDetail;
         }
         if (command) {
           entry.command = command;
         }
         if (changedFiles.length > 0) {
           entry.changedFiles = changedFiles;
+        }
+        if (title) {
+          entry.toolTitle = title;
+        }
+        if (itemType) {
+          entry.itemType = itemType;
+        }
+        if (requestKind) {
+          entry.requestKind = requestKind;
         }
         entry.task = {
           id: payloadTaskId,
@@ -509,11 +521,14 @@ export function deriveWorkLogEntries(
             : {}),
           ...(lastToolName ? { lastToolName } : {}),
         };
-      } else if (detail && !isRedundantToolDetail(detail, toolCall, command)) {
-        const normalizedDetail = stripTrailingExitCode(detail).output;
-        if (normalizedDetail) {
-          entry.detail = normalizedDetail;
-        }
+        return entry;
+      }
+
+      if (
+        normalizedDetail &&
+        (!detail || !isRedundantToolDetail(detail, toolCall, command))
+      ) {
+        entry.detail = normalizedDetail;
       }
       if (command) {
         entry.command = command;

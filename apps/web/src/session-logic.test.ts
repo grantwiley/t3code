@@ -402,6 +402,27 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["first", "second"]);
   });
 
+  it("extracts command text for command tool activities", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "command-tool",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          data: {
+            item: {
+              command: ["bun", "run", "lint"],
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.command).toBe("bun run lint");
+  });
+
   it("preserves task metadata across Claude task lifecycle events", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -516,6 +537,7 @@ describe("deriveWorkLogEntries", () => {
 
     const [entry] = deriveWorkLogEntries(activities, undefined);
     expect(entry).toMatchObject({
+      activityKind: "tool.completed",
       command: "bun run dev",
       detail: '{ "dev": "vite dev --port 3000" }',
       itemType: "command_execution",
@@ -634,7 +656,6 @@ describe("deriveWorkLogEntries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "file-tool",
-        createdAt: "2026-02-23T00:00:03.000Z",
         kind: "tool.completed",
         summary: "File change",
         payload: {
