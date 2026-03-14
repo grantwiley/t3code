@@ -326,78 +326,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               )}
               <div className="space-y-0.5">
                 {visibleEntries.map((workEntry) => (
-                  workEntry.toolCall ? (
-                    <div
-                      key={`work-row:${workEntry.id}`}
-                      className="rounded-md border border-border/70 bg-background/70 px-2.5 py-2"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="rounded-full border border-border/70 bg-card px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-foreground/85">
-                            {workEntry.toolCall.name}
-                          </span>
-                          <span
-                            className={`rounded-full border px-2 py-0.5 text-[10px] uppercase tracking-[0.08em] ${toolStatusClass(workEntry.toolCall.status)}`}
-                          >
-                            {toolStatusLabel(workEntry.toolCall.status)}
-                          </span>
-                        </div>
-                        {workEntry.command && (
-                          <pre className="mt-2 overflow-x-auto rounded-md border border-border/70 bg-card px-2 py-1 font-mono text-[11px] leading-relaxed text-foreground/85">
-                            {workEntry.command}
-                          </pre>
-                        )}
-                        {workEntry.toolCall.inputSummary &&
-                          workEntry.toolCall.inputSummary.length > 0 && (
-                            <div className="mt-2 flex flex-wrap gap-1.5">
-                              {workEntry.toolCall.inputSummary.map((input) => (
-                                <span
-                                  key={`${workEntry.id}:${input.label}:${input.value}`}
-                                  className="rounded-md border border-border/70 bg-card/80 px-2 py-1 text-[10px] leading-none text-muted-foreground/85"
-                                  title={`${input.label}: ${input.value}`}
-                                >
-                                  <span className="mr-1 uppercase tracking-[0.08em] text-muted-foreground/60">
-                                    {input.label}
-                                  </span>
-                                  <span className="font-mono text-foreground/80">
-                                    {input.value}
-                                  </span>
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                        {workEntry.changedFiles && workEntry.changedFiles.length > 0 && (
-                          <div className="mt-2 flex flex-wrap gap-1">
-                            {workEntry.changedFiles.slice(0, 6).map((filePath) => (
-                              <span
-                                key={`${workEntry.id}:${filePath}`}
-                                className="rounded-md border border-border/70 bg-card/75 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/85"
-                                title={filePath}
-                              >
-                                {filePath}
-                              </span>
-                            ))}
-                            {workEntry.changedFiles.length > 6 && (
-                              <span className="px-1 text-[10px] text-muted-foreground/65">
-                                +{workEntry.changedFiles.length - 6} more
-                              </span>
-                            )}
-                          </div>
-                        )}
-                        {workEntry.detail &&
-                          (!workEntry.command || workEntry.detail !== workEntry.command) && (
-                            <p
-                              className="mt-2 text-[11px] leading-relaxed text-muted-foreground/75"
-                              title={workEntry.detail}
-                            >
-                              {workEntry.detail}
-                            </p>
-                          )}
-                      </div>
-                    </div>
-                  ) : (
-                    <SimpleWorkEntryRow key={`work-row:${workEntry.id}`} workEntry={workEntry} />
-                  )
+                  <SimpleWorkEntryRow key={`work-row:${workEntry.id}`} workEntry={workEntry} />
                 ))}
               </div>
             </div>
@@ -740,22 +669,6 @@ function workToneClass(tone: "thinking" | "tool" | "info" | "error"): string {
   if (tone === "tool") return "text-muted-foreground/70";
   if (tone === "thinking") return "text-muted-foreground/50";
   return "text-muted-foreground/40";
-}
-
-function toolStatusLabel(status: "started" | "updated" | "completed"): string {
-  if (status === "started") return "running";
-  if (status === "updated") return "update";
-  return "complete";
-}
-
-function toolStatusClass(status: "started" | "updated" | "completed"): string {
-  if (status === "started") {
-    return "border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-200";
-  }
-  if (status === "updated") {
-    return "border-sky-500/20 bg-sky-500/10 text-sky-700 dark:text-sky-200";
-  }
-  return "border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200";
 }
 
 function workEntryPreview(

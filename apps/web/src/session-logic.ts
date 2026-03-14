@@ -417,13 +417,162 @@ export function findLatestProposedPlan(
   };
 }
 
+type DerivedWorkLogEntry = WorkLogEntry & {
+  toolItemId?: string;
+};
+
+function mergeUniqueStrings(
+  left: ReadonlyArray<string> | undefined,
+  right: ReadonlyArray<string> | undefined,
+): ReadonlyArray<string> | undefined {
+  if ((left?.length ?? 0) === 0) {
+    return right;
+  }
+  if ((right?.length ?? 0) === 0) {
+    return left;
+  }
+  return [...new Set([...left!, ...right!])];
+}
+
+function mergeToolInputSummary(
+  left:
+    | ReadonlyArray<{
+        label: string;
+        value: string;
+      }>
+    | undefined,
+  right:
+    | ReadonlyArray<{
+        label: string;
+        value: string;
+      }>
+    | undefined,
+):
+  | ReadonlyArray<{
+      label: string;
+      value: string;
+    }>
+  | undefined {
+  if ((left?.length ?? 0) === 0) {
+    return right;
+  }
+  if ((right?.length ?? 0) === 0) {
+    return left;
+  }
+
+  const merged = new Map<string, { label: string; value: string }>();
+  for (const entry of [...left!, ...right!]) {
+    merged.set(`${entry.label}\u0000${entry.value}`, entry);
+  }
+  return [...merged.values()];
+}
+
+function mergeToolLifecycleEntries(
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+): DerivedWorkLogEntry {
+  const previousToolCall = previous.toolCall;
+  const nextToolCall = next.toolCall;
+  const mergedInputSummary = mergeToolInputSummary(
+    previousToolCall?.inputSummary,
+    nextToolCall?.inputSummary,
+  );
+  const mergedChangedFiles = mergeUniqueStrings(previous.changedFiles, next.changedFiles);
+
+  const mergedEntry: DerivedWorkLogEntry = {
+    id: next.id,
+    createdAt: next.createdAt,
+    label: next.label,
+    activityKind: next.activityKind,
+    tone: next.tone,
+  };
+
+  const mergedToolItemId = next.toolItemId ?? previous.toolItemId;
+  if (mergedToolItemId !== undefined) {
+    mergedEntry.toolItemId = mergedToolItemId;
+  }
+  const mergedDetail = next.detail ?? previous.detail;
+  if (mergedDetail !== undefined) {
+    mergedEntry.detail = mergedDetail;
+  }
+  const mergedCommand = next.command ?? previous.command;
+  if (mergedCommand !== undefined) {
+    mergedEntry.command = mergedCommand;
+  }
+  if (mergedChangedFiles !== undefined) {
+    mergedEntry.changedFiles = mergedChangedFiles;
+  }
+  const mergedToolTitle = next.toolTitle ?? previous.toolTitle;
+  if (mergedToolTitle !== undefined) {
+    mergedEntry.toolTitle = mergedToolTitle;
+  }
+  const mergedItemType = next.itemType ?? previous.itemType;
+  if (mergedItemType !== undefined) {
+    mergedEntry.itemType = mergedItemType;
+  }
+  const mergedRequestKind = next.requestKind ?? previous.requestKind;
+  if (mergedRequestKind !== undefined) {
+    mergedEntry.requestKind = mergedRequestKind;
+  }
+  const mergedTask = next.task ?? previous.task;
+  if (mergedTask !== undefined) {
+    mergedEntry.task = mergedTask;
+  }
+  if (previousToolCall || nextToolCall) {
+    mergedEntry.toolCall = {
+      name: nextToolCall?.name ?? previousToolCall?.name ?? next.label,
+      status: nextToolCall?.status ?? previousToolCall?.status ?? "completed",
+      ...(mergedInputSummary ? { inputSummary: mergedInputSummary } : {}),
+    };
+  }
+
+  return mergedEntry;
+}
+
+function collapseToolLifecycleEntries(entries: ReadonlyArray<DerivedWorkLogEntry>): WorkLogEntry[] {
+  const collapsed: DerivedWorkLogEntry[] = [];
+  const hiddenIndexes = new Set<number>();
+  const lastIndexByToolItemId = new Map<string, number>();
+
+  for (const entry of entries) {
+    const toolItemId = entry.toolItemId;
+    if (!toolItemId || !entry.toolCall) {
+      collapsed.push(entry);
+      continue;
+    }
+
+    const previousIndex = lastIndexByToolItemId.get(toolItemId);
+    if (previousIndex === undefined) {
+      lastIndexByToolItemId.set(toolItemId, collapsed.length);
+      collapsed.push(entry);
+      continue;
+    }
+
+    const previousEntry = collapsed[previousIndex];
+    if (!previousEntry) {
+      lastIndexByToolItemId.set(toolItemId, collapsed.length);
+      collapsed.push(entry);
+      continue;
+    }
+
+    hiddenIndexes.add(previousIndex);
+    const mergedEntry = mergeToolLifecycleEntries(previousEntry, entry);
+    lastIndexByToolItemId.set(toolItemId, collapsed.length);
+    collapsed.push(mergedEntry);
+  }
+
+  return collapsed
+    .filter((_, index) => !hiddenIndexes.has(index))
+    .map(({ toolItemId: _toolItemId, ...entry }) => entry);
+}
+
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
 ): WorkLogEntry[] {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const taskTypeById = new Map<string, string>();
-  return ordered
+  const entries = ordered
     .filter((activity) => (latestTurnId ? activity.turnId === latestTurnId : true))
     .filter((activity) => activity.kind !== "tool.started")
     .filter((activity) => activity.summary !== "Checkpoint captured")
@@ -438,13 +587,17 @@ export function deriveWorkLogEntries(
       const command = extractToolCommand(payload);
       const changedFiles = extractChangedFiles(payload, itemType);
       const title = extractToolTitle(payload);
-      const entry: WorkLogEntry = {
+      const entry: DerivedWorkLogEntry = {
         id: activity.id,
         createdAt: activity.createdAt,
         label: activity.summary,
         activityKind: activity.kind,
         tone: activity.tone === "approval" ? "info" : activity.tone,
       };
+      const payloadItemId = asTrimmedString(payload?.itemId);
+      if (payloadItemId) {
+        entry.toolItemId = payloadItemId;
+      }
       if (toolCall) {
         entry.toolCall = toolCall;
         entry.label = toolCall.name;
@@ -547,6 +700,8 @@ export function deriveWorkLogEntries(
       }
       return entry;
     });
+
+  return collapseToolLifecycleEntries(entries);
 }
 
 function workLogDetailFromPayload(

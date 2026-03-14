@@ -75,6 +75,7 @@ interface PiTurnState {
   aborted: boolean;
   assistantHasVisibleOutput: boolean;
   readonly toolStates: Map<string, PiToolState>;
+  readonly completedToolCallIds: Set<string>;
 }
 
 interface PiSessionContext {
@@ -211,11 +212,29 @@ function resolvePiApprovalBridgePath(): string {
 
 function classifyToolItemType(toolName: string): CanonicalItemType {
   const normalized = toolName.trim().toLowerCase();
-  if (normalized === "bash" || normalized.includes("command") || normalized.includes("shell")) {
+  if (
+    normalized === "bash" ||
+    normalized.includes("command") ||
+    normalized.includes("shell") ||
+    normalized.includes("terminal")
+  ) {
     return "command_execution";
   }
-  if (normalized === "write" || normalized === "edit") {
+  if (
+    normalized === "write" ||
+    normalized === "edit" ||
+    normalized.includes("patch") ||
+    normalized.includes("replace") ||
+    normalized.includes("create") ||
+    normalized.includes("delete")
+  ) {
     return "file_change";
+  }
+  if (normalized.includes("search") || normalized.includes("grep") || normalized.includes("find")) {
+    return "web_search";
+  }
+  if (normalized.includes("image") || normalized.includes("screenshot") || normalized.includes("view")) {
+    return "image_view";
   }
   return "dynamic_tool_call";
 }
@@ -253,6 +272,73 @@ function buildToolLifecycleData(
     },
     ...(result !== undefined ? { result } : {}),
   };
+}
+
+interface ExtractedPiToolCall {
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly input: Record<string, unknown>;
+}
+
+function parseToolCallRecord(value: unknown): ExtractedPiToolCall | undefined {
+  const record = asRecord(value);
+  if (!record) {
+    return undefined;
+  }
+  const type = asString(record.type);
+  if (type !== undefined && type !== "toolCall") {
+    return undefined;
+  }
+  const toolCallId = asString(record.id) ?? asString(record.toolCallId);
+  const toolName = asString(record.name) ?? asString(record.toolName);
+  if (!toolCallId || !toolName) {
+    return undefined;
+  }
+  const input = normalizeToolInput(record.arguments ?? record.args ?? record.input);
+  return { toolCallId, toolName, input };
+}
+
+function extractToolCallsFromUnknown(value: unknown): ReadonlyArray<ExtractedPiToolCall> {
+  const direct = parseToolCallRecord(value);
+  if (direct) {
+    return [direct];
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return [];
+  }
+
+  const collected = new Map<string, ExtractedPiToolCall>();
+  const append = (candidate: unknown) => {
+    for (const toolCall of extractToolCallsFromUnknown(candidate)) {
+      collected.set(toolCall.toolCallId, toolCall);
+    }
+  };
+
+  if (Array.isArray(record.content)) {
+    for (const entry of record.content) {
+      append(entry);
+    }
+  }
+  if (record.toolCall !== undefined) {
+    append(record.toolCall);
+  }
+  if (record.partial !== undefined) {
+    append(record.partial);
+  }
+
+  const fallbackToolCallId = asString(record.toolCallId) ?? asString(record.id);
+  const fallbackToolName = asString(record.toolName) ?? asString(record.name);
+  if (fallbackToolCallId && fallbackToolName) {
+    collected.set(fallbackToolCallId, {
+      toolCallId: fallbackToolCallId,
+      toolName: fallbackToolName,
+      input: normalizeToolInput(record.arguments ?? record.args ?? record.input),
+    });
+  }
+
+  return [...collected.values()];
 }
 
 function providerError(method: string, detail: string, cause?: unknown): ProviderAdapterRequestError {
@@ -449,7 +535,16 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const startAssistantTurn = (context: PiSessionContext, createdAt: string) =>
       Effect.gen(function* () {
         if (context.turnState) {
-          yield* finalizeTurn(context, context.turnState.aborted ? "aborted" : "completed");
+          // Pi may emit multiple internal turn_start events during a single agent run
+          // as it loops through assistant/tool steps. T3 should treat the whole run as
+          // one orchestration turn so the work log and elapsed timer remain stable.
+          context.session = {
+            ...context.session,
+            status: "running",
+            activeTurnId: context.turnState.turnId,
+            updatedAt: createdAt,
+          };
+          return;
         }
         const turnId = context.pendingTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
         const assistantItemId = RuntimeItemId.makeUnsafe(`pi:assistant:${crypto.randomUUID()}`);
@@ -460,6 +555,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           aborted: false,
           assistantHasVisibleOutput: false,
           toolStates: new Map(),
+          completedToolCallIds: new Set(),
         };
         context.session = {
           ...context.session,
@@ -503,37 +599,68 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         );
       });
 
-    const handleToolStart = (context: PiSessionContext, event: Record<string, unknown>) =>
+    const ensureAssistantTurnStarted = (context: PiSessionContext, createdAt: string) =>
+      context.turnState || context.pendingTurnId
+        ? startAssistantTurn(context, createdAt)
+        : Effect.void;
+
+    const rememberToolState = (
+      context: PiSessionContext,
+      toolCall: ExtractedPiToolCall,
+    ) => {
+      const turnState = context.turnState;
+      if (!turnState || turnState.completedToolCallIds.has(toolCall.toolCallId)) {
+        return undefined;
+      }
+
+      const previous = turnState.toolStates.get(toolCall.toolCallId);
+      const toolName = toolCall.toolName.trim().length > 0 ? toolCall.toolName : previous?.toolName ?? "tool";
+      const toolInput =
+        Object.keys(toolCall.input).length > 0 ? toolCall.input : previous?.input ?? {};
+      const itemId = previous?.itemId ?? RuntimeItemId.makeUnsafe(`pi:tool:${toolCall.toolCallId}`);
+      const itemType = previous?.itemType ?? classifyToolItemType(toolName);
+      const nextState: PiToolState = {
+        itemId,
+        itemType,
+        toolName,
+        input: toolInput,
+      };
+      turnState.toolStates.set(toolCall.toolCallId, nextState);
+      return {
+        previous,
+        next: nextState,
+      };
+    };
+
+    const announceToolCall = (
+      context: PiSessionContext,
+      toolCall: ExtractedPiToolCall,
+      createdAt: string,
+      lifecycle: "started" | "updated",
+    ) =>
       Effect.gen(function* () {
-        const toolCallId = asString(event.toolCallId) ?? crypto.randomUUID();
-        const toolName = asString(event.toolName) ?? "tool";
-        const itemId = RuntimeItemId.makeUnsafe(`pi:tool:${toolCallId}`);
-        const createdAt = nowIso();
-        const itemType = classifyToolItemType(toolName);
-        const toolInput = normalizeToolInput(event.args);
-        if (context.turnState) {
-          context.turnState.toolStates.set(toolCallId, {
-            itemId,
-            itemType,
-            toolName,
-            input: toolInput,
-          });
+        yield* ensureAssistantTurnStarted(context, createdAt);
+        const remembered = rememberToolState(context, toolCall);
+        if (!remembered) {
+          return;
         }
-        const detail = summarizeToolArgs(toolInput);
+
+        const detail = summarizeToolArgs(remembered.next.input);
+        const effectiveLifecycle = remembered.previous ? lifecycle : "started";
         yield* publishRuntimeEvent(
           makeRuntimeEvent({
             eventId: EventId.makeUnsafe(crypto.randomUUID()),
             threadId: context.threadId,
             createdAt,
             ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
-            itemId,
-            type: "item.started",
+            itemId: remembered.next.itemId,
+            type: effectiveLifecycle === "started" ? "item.started" : "item.updated",
             payload: {
-              itemType,
+              itemType: remembered.next.itemType,
               status: "inProgress",
-              title: toolName,
+              title: remembered.next.toolName,
               ...(detail ? { detail } : {}),
-              data: buildToolLifecycleData(toolName, toolInput),
+              data: buildToolLifecycleData(remembered.next.toolName, remembered.next.input),
             },
           }),
         );
@@ -543,95 +670,58 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             threadId: context.threadId,
             createdAt,
             ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
-            itemId,
+            itemId: remembered.next.itemId,
             type: "tool.progress",
             payload: {
-              toolUseId: toolCallId,
-              toolName,
+              toolUseId: toolCall.toolCallId,
+              toolName: remembered.next.toolName,
               ...(detail ? { summary: detail } : {}),
             },
           }),
         );
       });
 
-    const handleToolUpdate = (context: PiSessionContext, event: Record<string, unknown>) =>
+    const completeToolCall = (
+      context: PiSessionContext,
+      input: ExtractedPiToolCall & {
+        readonly result?: unknown;
+        readonly isError?: boolean;
+      },
+      createdAt: string,
+    ) =>
       Effect.gen(function* () {
-        const toolCallId = asString(event.toolCallId) ?? crypto.randomUUID();
-        const previousToolState = context.turnState?.toolStates.get(toolCallId);
-        const toolName = previousToolState?.toolName ?? asString(event.toolName) ?? "tool";
-        const createdAt = nowIso();
-        const itemId = previousToolState?.itemId ?? RuntimeItemId.makeUnsafe(`pi:tool:${toolCallId}`);
-        const toolInput = asRecord(event.args) ?? previousToolState?.input ?? {};
-        const itemType = previousToolState?.itemType ?? classifyToolItemType(toolName);
-        if (context.turnState) {
-          context.turnState.toolStates.set(toolCallId, {
-            itemId,
-            itemType,
-            toolName,
-            input: toolInput,
-          });
+        yield* ensureAssistantTurnStarted(context, createdAt);
+        const turnState = context.turnState;
+        if (!turnState || turnState.completedToolCallIds.has(input.toolCallId)) {
+          return;
         }
-        const detail = extractTextContent(event.partialResult) ?? summarizeToolArgs(toolInput);
-        yield* publishRuntimeEvent(
-          makeRuntimeEvent({
-            eventId: EventId.makeUnsafe(crypto.randomUUID()),
-            threadId: context.threadId,
-            createdAt,
-            ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
-            itemId,
-            type: "item.updated",
-            payload: {
-              itemType,
-              status: "inProgress",
-              title: toolName,
-              ...(detail ? { detail } : {}),
-              data: buildToolLifecycleData(toolName, toolInput, event.partialResult),
-            },
-          }),
-        );
-        yield* publishRuntimeEvent(
-          makeRuntimeEvent({
-            eventId: EventId.makeUnsafe(crypto.randomUUID()),
-            threadId: context.threadId,
-            createdAt,
-            ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
-            itemId,
-            type: "tool.progress",
-            payload: {
-              toolUseId: toolCallId,
-              toolName,
-              ...(detail ? { summary: detail } : {}),
-            },
-          }),
-        );
-      });
 
-    const handleToolEnd = (context: PiSessionContext, event: Record<string, unknown>) =>
-      Effect.gen(function* () {
-        const toolCallId = asString(event.toolCallId) ?? crypto.randomUUID();
-        const previousToolState = context.turnState?.toolStates.get(toolCallId);
-        const toolName = previousToolState?.toolName ?? asString(event.toolName) ?? "tool";
-        const createdAt = nowIso();
-        const itemId = previousToolState?.itemId ?? RuntimeItemId.makeUnsafe(`pi:tool:${toolCallId}`);
-        const toolInput = previousToolState?.input ?? normalizeToolInput(event.args);
-        const itemType = previousToolState?.itemType ?? classifyToolItemType(toolName);
-        const detail = extractTextContent(event.result) ?? summarizeToolArgs(event.result);
-        const status = event.isError === true ? "failed" : "completed";
-        context.turnState?.toolStates.delete(toolCallId);
+        const remembered = rememberToolState(context, input);
+        const toolState = remembered?.next;
+        if (!toolState) {
+          return;
+        }
+
+        const detail =
+          extractTextContent(input.result) ??
+          summarizeToolArgs(input.result) ??
+          summarizeToolArgs(toolState.input);
+        turnState.toolStates.delete(input.toolCallId);
+        turnState.completedToolCallIds.add(input.toolCallId);
         yield* publishRuntimeEvent(
           makeRuntimeEvent({
             eventId: EventId.makeUnsafe(crypto.randomUUID()),
             threadId: context.threadId,
             createdAt,
             ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
-            itemId,
+            itemId: toolState.itemId,
             type: "item.completed",
             payload: {
-              itemType,
-              status,
-              title: toolName,
+              itemType: toolState.itemType,
+              status: input.isError === true ? "failed" : "completed",
+              title: toolState.toolName,
               ...(detail ? { detail } : {}),
-              data: buildToolLifecycleData(toolName, toolInput, event.result),
+              data: buildToolLifecycleData(toolState.toolName, toolState.input, input.result),
             },
           }),
         );
@@ -642,15 +732,103 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               threadId: context.threadId,
               createdAt,
               ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
-              itemId,
+              itemId: toolState.itemId,
               type: "tool.summary",
               payload: {
                 summary: detail,
-                precedingToolUseIds: [toolCallId],
+                precedingToolUseIds: [input.toolCallId],
               },
             }),
           );
         }
+      });
+
+    const handleToolStart = (context: PiSessionContext, event: Record<string, unknown>) =>
+      Effect.gen(function* () {
+        const createdAt = nowIso();
+        const toolCallId = asString(event.toolCallId) ?? crypto.randomUUID();
+        const toolName = asString(event.toolName) ?? "tool";
+        yield* announceToolCall(
+          context,
+          {
+            toolCallId,
+            toolName,
+            input: normalizeToolInput(event.args),
+          },
+          createdAt,
+          "updated",
+        );
+      });
+
+    const handleToolUpdate = (context: PiSessionContext, event: Record<string, unknown>) =>
+      Effect.gen(function* () {
+        const createdAt = nowIso();
+        yield* ensureAssistantTurnStarted(context, createdAt);
+        const toolCallId = asString(event.toolCallId) ?? crypto.randomUUID();
+        const previousToolState = context.turnState?.toolStates.get(toolCallId);
+        const toolName = previousToolState?.toolName ?? asString(event.toolName) ?? "tool";
+        const toolInput = asRecord(event.args) ?? previousToolState?.input ?? {};
+        const remembered = rememberToolState(context, {
+          toolCallId,
+          toolName,
+          input: toolInput,
+        });
+        if (!remembered) {
+          return;
+        }
+
+        const detail = extractTextContent(event.partialResult) ?? summarizeToolArgs(toolInput);
+        yield* publishRuntimeEvent(
+          makeRuntimeEvent({
+            eventId: EventId.makeUnsafe(crypto.randomUUID()),
+            threadId: context.threadId,
+            createdAt,
+            ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+            itemId: remembered.next.itemId,
+            type: "item.updated",
+            payload: {
+              itemType: remembered.next.itemType,
+              status: "inProgress",
+              title: remembered.next.toolName,
+              ...(detail ? { detail } : {}),
+              data: buildToolLifecycleData(remembered.next.toolName, remembered.next.input, event.partialResult),
+            },
+          }),
+        );
+        yield* publishRuntimeEvent(
+          makeRuntimeEvent({
+            eventId: EventId.makeUnsafe(crypto.randomUUID()),
+            threadId: context.threadId,
+            createdAt,
+            ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+            itemId: remembered.next.itemId,
+            type: "tool.progress",
+            payload: {
+              toolUseId: toolCallId,
+              toolName: remembered.next.toolName,
+              ...(detail ? { summary: detail } : {}),
+            },
+          }),
+        );
+      });
+
+    const handleToolEnd = (context: PiSessionContext, event: Record<string, unknown>) =>
+      Effect.gen(function* () {
+        const createdAt = nowIso();
+        const toolCallId = asString(event.toolCallId) ?? crypto.randomUUID();
+        const previousToolState = context.turnState?.toolStates.get(toolCallId);
+        const toolName = previousToolState?.toolName ?? asString(event.toolName) ?? "tool";
+        yield* completeToolCall(
+          context,
+          {
+            toolCallId,
+            toolName,
+            input: previousToolState?.input ?? normalizeToolInput(event.args),
+            result: event.result,
+            isError: event.isError === true,
+          },
+          createdAt,
+        );
       });
 
     const handleRpcEvent = (context: PiSessionContext, event: Record<string, unknown>) =>
@@ -675,10 +853,14 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           }
           case "message_update": {
             const assistantMessageEvent = asRecord(event.assistantMessageEvent);
-            if (!assistantMessageEvent || !context.turnState) {
+            if (!assistantMessageEvent) {
               return;
             }
             const createdAt = isoFromTimestamp(asRecord(event.message)?.timestamp);
+            yield* ensureAssistantTurnStarted(context, createdAt);
+            if (!context.turnState) {
+              return;
+            }
             const deltaType = asString(assistantMessageEvent.type);
             if (deltaType === "text_delta") {
               const delta = asString(assistantMessageEvent.delta);
@@ -725,6 +907,26 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               );
               return;
             }
+            if (
+              deltaType === "toolcall_start" ||
+              deltaType === "toolcall_delta" ||
+              deltaType === "toolcall_end"
+            ) {
+              const toolCalls = [
+                ...extractToolCallsFromUnknown(assistantMessageEvent),
+                ...extractToolCallsFromUnknown(asRecord(event.message)),
+              ];
+              const uniqueToolCalls = new Map(toolCalls.map((toolCall) => [toolCall.toolCallId, toolCall]));
+              for (const toolCall of uniqueToolCalls.values()) {
+                yield* announceToolCall(
+                  context,
+                  toolCall,
+                  createdAt,
+                  deltaType === "toolcall_start" ? "started" : "updated",
+                );
+              }
+              return;
+            }
             if (deltaType === "error") {
               yield* publishRuntimeEvent(
                 makeRuntimeEvent({
@@ -744,10 +946,42 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           }
           case "message_end": {
             const message = asRecord(event.message);
-            if (!context.turnState || message?.role !== "assistant") {
+            if (!message) {
               return;
             }
             const createdAt = isoFromTimestamp(message.timestamp);
+            const role = asString(message.role);
+
+            if (role === "toolResult") {
+              const toolCalls = extractToolCallsFromUnknown(message);
+              const [toolCall] = toolCalls;
+              if (toolCall) {
+                yield* completeToolCall(
+                  context,
+                  {
+                    ...toolCall,
+                    result: message,
+                    isError: message.isError === true,
+                  },
+                  createdAt,
+                );
+              }
+              return;
+            }
+
+            if (role !== "assistant") {
+              return;
+            }
+
+            yield* ensureAssistantTurnStarted(context, createdAt);
+            if (!context.turnState) {
+              return;
+            }
+
+            for (const toolCall of extractToolCallsFromUnknown(message)) {
+              yield* announceToolCall(context, toolCall, createdAt, "updated");
+            }
+
             const detail = extractTextContent(message);
             if (detail) {
               context.turnState.assistantHasVisibleOutput = true;

@@ -603,6 +603,7 @@ describe("deriveWorkLogEntries", () => {
         summary: "bash",
         tone: "tool",
         payload: {
+          itemId: "pi:tool:call-1",
           itemType: "command_execution",
           title: "bash",
           status: "inProgress",
@@ -641,6 +642,81 @@ describe("deriveWorkLogEntries", () => {
         toolCall: {
           name: "bash",
           status: "updated",
+          inputSummary: [
+            {
+              label: "cwd",
+              value: "apps/web",
+            },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("collapses repeated tool lifecycle updates for the same Pi tool call", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "pi-bash-update",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.updated",
+        summary: "bash",
+        tone: "tool",
+        payload: {
+          itemId: "pi:tool:call-2",
+          itemType: "command_execution",
+          title: "bash",
+          status: "inProgress",
+          detail: "partial output",
+          data: {
+            toolName: "bash",
+            input: {
+              command: "bun run lint",
+              cwd: "apps/web",
+            },
+            item: {
+              input: {
+                command: "bun run lint",
+                cwd: "apps/web",
+              },
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "pi-bash-complete",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        kind: "tool.completed",
+        summary: "bash",
+        tone: "tool",
+        payload: {
+          itemId: "pi:tool:call-2",
+          itemType: "command_execution",
+          title: "bash",
+          detail: "final output",
+          data: {
+            toolName: "bash",
+            input: {
+              command: "bun run lint",
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(deriveWorkLogEntries(activities, undefined)).toEqual([
+      {
+        id: "pi-bash-complete",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        label: "bash",
+        tone: "tool",
+        activityKind: "tool.completed",
+        detail: "final output",
+        command: "bun run lint",
+        itemType: "command_execution",
+        toolTitle: "bash",
+        toolCall: {
+          name: "bash",
+          status: "completed",
           inputSummary: [
             {
               label: "cwd",
