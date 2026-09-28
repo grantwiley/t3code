@@ -63,6 +63,11 @@
         { "range": ">=0.80.5", "status": "supported" },
         { "range": "<0.80.5", "status": "unsupported" }
       ]
+    },
+    {
+      "driver": "muse",
+      "t3CodeRange": ">=0.0.42",
+      "ranges": []
     }
   ],
   "currentModels": {

@@ -5,6 +5,7 @@ import {
   CodexSettings,
   CursorSettings,
   GrokSettings,
+  MuseSettings,
   OpenCodeSettings,
   PiSettings,
   ProviderDriverKind,
@@ -91,6 +92,12 @@ const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
     label: "Pi",
     badgeLabel: "Early Access",
     settingsSchema: PiSettings,
+  },
+  {
+    value: ProviderDriverKind.make("muse"),
+    label: "Muse Code",
+    badgeLabel: "Beta",
+    settingsSchema: MuseSettings,
   },
   {
     value: ProviderDriverKind.make("acpRegistry"),
